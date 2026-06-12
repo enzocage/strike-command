@@ -410,8 +410,8 @@ button:active { transform: scale(0.97); }
 /* ── Szenen-Label ── */
 #scene-label {
     position: fixed;
-    bottom: 22px;
-    right: 18px;
+    bottom: 50px;
+    right: 14px;
     font-family: 'Courier New', monospace;
     font-size: 9px;
     letter-spacing: 3px;
@@ -773,26 +773,111 @@ input[type=range]::-webkit-slider-thumb {
 
 /* ── Minimap ── */
 #minimap-canvas {
-    position: fixed; top: 14px; right: 14px;
-    width: 280px; height: 280px;
-    border: 2px solid rgba(0, 240, 255, 0.4);
+    position: fixed; top: 58px; right: 14px;
+    width: 360px; height: 360px;
+    border: 2px solid rgba(0, 240, 255, 0.35);
     border-radius: 4px;
-    background: #0a1520;
     z-index: 40;
-    box-shadow: 0 0 24px rgba(0, 240, 255, 0.15), inset 0 0 20px rgba(0, 0, 0, 0.8);
+    box-shadow: 0 0 24px rgba(0, 240, 255, 0.15), 0 12px 40px rgba(0,0,0,0.6);
     display: none;
-    transition: opacity 0.3s;
-    pointer-events: auto;
-    cursor: crosshair;
+    pointer-events: none;
 }
-#minimap-canvas.visible {
+#minimap-close-btn {
+    display: none;
+    position: fixed;
+    top: 64px;
+    right: 20px;
+    z-index: 42;
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+    line-height: 18px;
+    text-align: center;
+    cursor: pointer;
+    background: rgba(10, 18, 30, 0.75);
+    border: 1px solid rgba(0, 240, 255, 0.4);
+    color: #00f0ff;
+    border-radius: 2px;
+    font-family: monospace;
+    padding: 0;
+    transition: all 0.18s ease;
+    pointer-events: auto;
+}
+#minimap-close-btn.show {
     display: block;
+}
+#minimap-close-btn:hover {
+    background: rgba(255, 45, 85, 0.2);
+    border-color: #ff2d55;
+    color: #ff2d55;
+    box-shadow: 0 0 8px rgba(255, 45, 85, 0.3);
 }
 #minimap-toggle {
     display: none !important;
+    position: fixed;
+    bottom: 14px;
+    right: 110px;
+    z-index: 45;
+    font-size: 9px;
+    height: 24px;
+    width: 90px;
+    padding: 0 4px;
+    text-align: center;
+    line-height: 22px;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    font-family: 'Orbitron', monospace;
+    cursor: pointer;
+    background: rgba(10, 18, 30, 0.75);
+    border: 1px solid rgba(0, 240, 255, 0.35);
+    color: #00f0ff;
+    border-radius: 3px;
+    transition: all 0.18s ease;
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.08);
 }
 #minimap-toggle.show {
     display: block !important;
+}
+#minimap-toggle:hover {
+    background: rgba(0, 240, 255, 0.15);
+    border-color: #00f0ff;
+    color: #fff;
+    box-shadow: 0 0 15px rgba(0, 240, 255, 0.25);
+}
+#help-toggle {
+    display: none !important;
+    position: fixed;
+    bottom: 14px;
+    right: 14px;
+    z-index: 45;
+    font-size: 9px;
+    height: 24px;
+    width: 90px;
+    padding: 0 4px;
+    text-align: center;
+    line-height: 22px;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    font-family: 'Orbitron', monospace;
+    cursor: pointer;
+    background: rgba(10, 18, 30, 0.75);
+    border: 1px solid rgba(0, 240, 255, 0.35);
+    color: #00f0ff;
+    border-radius: 3px;
+    transition: all 0.18s ease;
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.08);
+}
+#help-toggle.show {
+    display: block !important;
+}
+#help-toggle:hover {
+    background: rgba(0, 240, 255, 0.15);
+    border-color: #00f0ff;
+    color: #fff;
+    box-shadow: 0 0 15px rgba(0, 240, 255, 0.25);
+}
+@media (max-width: 900px) {
+    #minimap-canvas { width: 220px; height: 220px; top: 52px; }
 }
 
 /* ── Wetter-Effekte ── */

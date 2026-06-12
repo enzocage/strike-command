@@ -171,20 +171,34 @@ function init() {
         Audio.init(); startGame();
     };
 
-    document.getElementById('btn-rules').onclick = () => {
+    const toggleRules = () => {
         Audio.play('click');
-        document.getElementById('rules-modal').classList.add('visible');
+        document.getElementById('rules-modal').classList.toggle('visible');
     };
-    document.getElementById('btn-rules-close').onclick = () => {
-        Audio.play('click');
-        document.getElementById('rules-modal').classList.remove('visible');
-    };
+
+    document.getElementById('btn-rules').onclick = toggleRules;
+    document.getElementById('btn-rules-close').onclick = toggleRules;
     document.getElementById('rules-modal').addEventListener('click', (e) => {
         if (e.target === document.getElementById('rules-modal')) {
-            Audio.play('click');
-            document.getElementById('rules-modal').classList.remove('visible');
+            toggleRules();
         }
     });
+
+    window.addEventListener('keydown', (e) => {
+        if ((e.key.toLowerCase() === 'h' || e.key === 'Escape') &&
+            !(e.target && e.target.closest && e.target.closest('input'))) {
+            const modal = document.getElementById('rules-modal');
+            if (e.key === 'Escape' && !modal.classList.contains('visible')) return;
+            toggleRules();
+        }
+    });
+
+    // Create help button dynamically
+    const helpBtn = document.createElement('button');
+    helpBtn.id = 'help-toggle';
+    helpBtn.innerHTML = `❓ HILFE [H]`;
+    document.getElementById('ui-layer').appendChild(helpBtn);
+    helpBtn.addEventListener('click', toggleRules);
     window.showMenuOpts = () => {
         document.getElementById('ai-opts').style.display = 'none';
         document.getElementById('menu-opts').style.display = 'block';
@@ -384,9 +398,7 @@ function showStatsScreen(winner) {
         '</div>';
 
     // Minimap verstecken
-    const mmCanvas = document.getElementById('minimap-canvas');
-    if (mmCanvas) mmCanvas.style.display = 'none';
-    if (window._minimapToggle) window._minimapToggle.classList.remove('show');
+    Minimap.hide();
 
     screen.classList.add('visible'); Audio.play('victory');
 }
@@ -443,12 +455,9 @@ function startGame() {
     assignPlayerRoles();
     updateRoleIcons();
 
-    // Minimap anzeigen
-    const mmCanvas = document.getElementById('minimap-canvas');
-    if (mmCanvas) {
-        mmCanvas.style.display = 'block';
-    }
-    if (window._minimapToggle) window._minimapToggle.classList.add('show');
+    // Minimap: Terrain der neuen Karte aufbauen und anzeigen
+    Minimap.rebuild();
+    Minimap.show();
 
     setTimeout(announceTurn, 500);
 }

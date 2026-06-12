@@ -1,7 +1,11 @@
 // ═══════════════════════════════════════════════════════════════
-// STRIKE COMMANDER — Tactical Spatial Minimap
-// Vollständige Terrain-Darstellung, alle Gameplay-Elemente,
-// Sichtlinien, Munitionsreichweite, Taktische Übersicht
+// STRIKE COMMANDER — Taktische 3D-Minimap
+// Echtes Terrain (hypsometrische Färbung), reale Seen & Küstenlinien
+// (Marching Squares), Höhenlinien, alle Gameplay-Elemente live,
+// Fog-of-War-treu, toggbar per Button & [M]-Taste.
+//
+// Architektur: init() einmalig · rebuild() pro Partie (statisches
+// Terrain) · draw() pro Frame (nur Marker-Sync, keine Allokationen)
 // ═══════════════════════════════════════════════════════════════
 
 const Minimap = {
@@ -9,16 +13,23 @@ const Minimap = {
     renderer: null,
     scene: null,
     camera: null,
-    terrainMesh: null,
-    waterMesh: null,
-    contourLines: null,
-    waterBorder: null,
-    gridGroup: null,
-    treeMarkers: [],
-    unitMarkers: [],
     enabled: true,
     size: 360,
 
+    staticGroup: null,      // Terrain, Wasser, Konturen, Grid, Küste
+    treeGroup: null,        // Baum-Marker (alive-Sync)
+    bunkerGroup: null,
+    tankMarkers: [],        // [{tank, group, body, hpBar, hpMat}]
+    cpMarkers: [],          // [{cp, flagMat}]
+    shieldPool: [],
+    projMarker: null,
+    projTracer: null,       // Projektil-Geschwindigkeitstracer
+    camWedge: null,
+    closeBtn: null,         // Schließen-Button am Minimap-Kopf
+    _treeRefs: [],
+    _bunkerRefs: [],
+
+    // ── Einmalige Initialisierung ──
     init() {
         let canvas = document.getElementById('minimap-canvas');
         if (!canvas) {
@@ -30,520 +41,550 @@ const Minimap = {
         }
         this.canvas = canvas;
 
+        let closeBtn = document.getElementById('minimap-close-btn');
+        if (!closeBtn) {
+            closeBtn = document.createElement('button');
+            closeBtn.id = 'minimap-close-btn';
+            closeBtn.innerHTML = '✖';
+            document.getElementById('ui-layer').appendChild(closeBtn);
+
+            closeBtn.addEventListener('click', () => {
+                if (this.enabled) {
+                    window._minimapToggle.click();
+                }
+            });
+        }
+        this.closeBtn = closeBtn;
+
         try {
             this.renderer = new THREE.WebGLRenderer({
-                canvas: canvas,
-                antialias: true,
-                alpha: false,
-                powerPreference: 'low-power'
+                canvas, antialias: true, alpha: false, powerPreference: 'low-power'
             });
             this.renderer.setSize(this.size, this.size);
             this.renderer.setPixelRatio(1);
-            this.renderer.setClearColor(0x0a1520, 1);
-            this.renderer.shadowMap.enabled = false;
+            this.renderer.setClearColor(0x060c14, 1);
         } catch (e) {
             console.warn('Minimap WebGL init failed:', e);
             return;
         }
 
         this.scene = new THREE.Scene();
-        this.camera = new THREE.OrthographicCamera(
-            -MAP_SIZE / 2, MAP_SIZE / 2,
-            MAP_SIZE / 2, -MAP_SIZE / 2,
-            0.1, 10000
-        );
-        this.camera.position.set(0, 600, 0);
+        this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 5000);
+        this.camera.up.set(0, 0, -1);           // Norden (-z) ist oben
+        this.camera.position.set(0, 1200, 0);
         this.camera.lookAt(0, 0, 0);
 
-        // Helles Licht für Minimap-Lesbarkeit
-        const light = new THREE.DirectionalLight(0xffffff, 1.4);
-        light.position.set(400, 900, 400);
-        this.scene.add(light);
-        const ambient = new THREE.AmbientLight(0xddddff, 0.9);
-        this.scene.add(ambient);
+        const sun = new THREE.DirectionalLight(0xfff4e0, 1.54);
+        sun.position.set(400, 900, 300);
+        this.scene.add(sun);
+        this.scene.add(new THREE.AmbientLight(0xc8d8ee, 0.85));
 
-        this.createGridLines();
-        this.createTerrainMesh();
-        this.createWaterMesh();
-        this.createTreeMarkers();
-        this.createContourLines();
         this.setupToggle();
-        this.setupTooltip();
+        this.canvas.title = 'Taktische Karte — Höhenlinien, Seen, Einheiten · [M] zum Umschalten';
+
+        this.rebuild();
     },
 
-    createGridLines() {
-        // Raster für räumliche Orientierung
-        this.gridGroup = new THREE.Group();
-        const gridSpacing = 200;
-        const gridLines = Math.ceil(MAP_SIZE / gridSpacing);
-        const gridMat = new THREE.LineBasicMaterial({
-            color: 0x334455,
-            transparent: true,
-            opacity: 0.25,
-            linewidth: 1
-        });
-
-        for (let i = 0; i <= gridLines; i++) {
-            const pos = (i - gridLines / 2) * gridSpacing;
-
-            // Vertikale Linien
-            const geo1 = new THREE.BufferGeometry();
-            geo1.setAttribute('position', new THREE.BufferAttribute(
-                new Float32Array([
-                    pos, 10, -MAP_SIZE / 2,
-                    pos, 10, MAP_SIZE / 2
-                ]), 3
-            ));
-            this.gridGroup.add(new THREE.Line(geo1, gridMat));
-
-            // Horizontale Linien
-            const geo2 = new THREE.BufferGeometry();
-            geo2.setAttribute('position', new THREE.BufferAttribute(
-                new Float32Array([
-                    -MAP_SIZE / 2, 10, pos,
-                    MAP_SIZE / 2, 10, pos
-                ]), 3
-            ));
-            this.gridGroup.add(new THREE.Line(geo2, gridMat));
-        }
-
-        this.scene.add(this.gridGroup);
+    // ── Statisches Terrain entsorgen ──
+    _disposeStatic() {
+        const kill = (grp) => {
+            if (!grp) return;
+            grp.traverse(c => {
+                if (c.isMesh || c.isLine || c.isLineSegments) {
+                    if (c.geometry) c.geometry.dispose();
+                    if (c.material && !c.material._shared) c.material.dispose();
+                }
+            });
+            this.scene.remove(grp);
+        };
+        kill(this.staticGroup); this.staticGroup = null;
+        kill(this.treeGroup); this.treeGroup = null;
+        kill(this.bunkerGroup); this.bunkerGroup = null;
+        this.tankMarkers.forEach(m => kill(m.group));
+        this.tankMarkers = [];
+        this.cpMarkers.forEach(m => kill(m.group));
+        this.cpMarkers = [];
+        this.shieldPool.forEach(m => kill(m));
+        this.shieldPool = [];
+        if (this.projMarker) { kill(this.projMarker); this.projMarker = null; }
+        if (this.projTracer) { kill(this.projTracer); this.projTracer = null; }
+        if (this.camWedge) { kill(this.camWedge); this.camWedge = null; }
     },
 
-    createTerrainMesh() {
-        if (!terrain || !heightData) return;
+    // ── Pro Partie: Terrain & Marker neu aufbauen (Kartengröße ändert sich!) ──
+    rebuild() {
+        if (!this.scene || typeof MAP_SIZE === 'undefined' || !heightData) return;
+        this._disposeStatic();
 
-        const seg = SEGMENTS / 2;
-        const geo = new THREE.BufferGeometry();
-        const positions = [];
-        const colors = [];
+        // Kamera-Frustum an aktuelle Kartengröße anpassen
+        const half = MAP_SIZE * 0.52;
+        this.camera.left = -half; this.camera.right = half;
+        this.camera.top = half; this.camera.bottom = -half;
+        this.camera.updateProjectionMatrix();
+
+        this.staticGroup = new THREE.Group();
+        this._buildTerrain();
+        this._buildWater();
+        this._buildContours();
+        this._buildGrid();
+        this.scene.add(this.staticGroup);
+
+        this._buildTrees();
+        this._buildBunkers();
+        this._buildTanks();
+        this._buildCPs();
+        this._buildProjectileAndCam();
+    },
+
+    // ── Hypsometrisch gefärbtes Terrain (tatsächliche Höhendaten) ──
+    _buildTerrain() {
+        const seg = Math.floor(SEGMENTS / 2);
+        const positions = [], colors = [];
+
+        const bands = [
+            { h: 1.5,  c: new THREE.Color(0x0f2a4a) },  // Tiefwasser
+            { h: 3.0,  c: new THREE.Color(0x1a4a75) },  // Flachwasser
+            { h: 5.0,  c: new THREE.Color(0xd2b48c) },  // Sand
+            { h: 12.0, c: new THREE.Color(0x3e7c32) },  // Gras
+            { h: 20.0, c: new THREE.Color(0x5a8f42) },  // Hügel
+            { h: 28.0, c: new THREE.Color(0x7c7c5c) },  // Berge
+            { h: 35.0, c: new THREE.Color(0x908d86) },  // Hochgebirge
+            { h: 99.0, c: new THREE.Color(0xe8ecee) },  // Schnee
+        ];
+        const colAt = (h) => {
+            for (let i = 0; i < bands.length; i++) {
+                if (h < bands[i].h) {
+                    if (i === 0) return bands[0].c.clone();
+                    const lo = bands[i - 1], hi = bands[i];
+                    const t = (h - lo.h) / (hi.h - lo.h);
+                    return lo.c.clone().lerp(hi.c, Math.max(0, Math.min(1, t)));
+                }
+            }
+            return bands[bands.length - 1].c.clone();
+        };
 
         for (let iz = 0; iz <= seg; iz++) {
             for (let ix = 0; ix <= seg; ix++) {
                 const x = (ix / seg - 0.5) * MAP_SIZE;
                 const z = (iz / seg - 0.5) * MAP_SIZE;
                 const h = getH(x, z);
-
                 positions.push(x, h, z);
 
-                // Detaillierte CIA-Kartenstil-Färbung
-                let col;
-                if (h < 2.5) {
-                    // Tiefes Wasser
-                    col = new THREE.Color(0x0a2850);
-                } else if (h < 4) {
-                    // Flachwasser/Strand
-                    col = new THREE.Color(0x4a6a8a);
-                } else if (h < 6) {
-                    // Sand/Ufer
-                    col = new THREE.Color(0x9a8a6a);
-                } else if (h < 10) {
-                    // Tiefes Gras
-                    col = new THREE.Color(0x2a5a1a);
-                } else if (h < 16) {
-                    // Helles Grasland
-                    col = new THREE.Color(0x4a7a2a);
-                } else if (h < 22) {
-                    // Hügel
-                    col = new THREE.Color(0x7a8a4a);
-                } else if (h < 28) {
-                    // Berge
-                    col = new THREE.Color(0x8a8a7a);
-                } else {
-                    // Schneeberge
-                    col = new THREE.Color(0xd0d0c0);
-                }
-
-                colors.push(col.r, col.g, col.b);
+                // Hangschattierung für plastisches Relief
+                const e = MAP_SIZE / seg;
+                const sx = (getH(x + e, z) - getH(x - e, z)) / (2 * e);
+                const sz = (getH(x, z + e) - getH(x, z - e)) / (2 * e);
+                const shade = 1 - Math.max(-0.25, Math.min(0.3, (sx + sz) * 0.55));
+                const c = colAt(h).multiplyScalar(shade);
+                colors.push(c.r, c.g, c.b);
             }
         }
 
         const indices = [];
         for (let iz = 0; iz < seg; iz++) {
             for (let ix = 0; ix < seg; ix++) {
-                const a = iz * (seg + 1) + ix;
-                const b = iz * (seg + 1) + ix + 1;
-                const c = (iz + 1) * (seg + 1) + ix;
-                const d = (iz + 1) * (seg + 1) + ix + 1;
-
-                indices.push(a, c, b);
-                indices.push(b, c, d);
+                const a = iz * (seg + 1) + ix, b = a + 1;
+                const c = a + seg + 1, d = c + 1;
+                indices.push(a, c, b, b, c, d);
             }
         }
 
+        const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
         geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
         geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
         geo.computeVertexNormals();
 
         const mat = new THREE.MeshStandardMaterial({
-            vertexColors: true,
-            roughness: 0.85,
-            metalness: 0.05,
-            flatShading: false
+            vertexColors: true, roughness: 0.9, metalness: 0.0
         });
-
-        this.terrainMesh = new THREE.Mesh(geo, mat);
-        this.scene.add(this.terrainMesh);
+        this.staticGroup.add(new THREE.Mesh(geo, mat));
     },
 
-    createWaterMesh() {
-        // Echte Wasserflächen basierend auf Höhe < 3
-        const waterGeo = new THREE.BufferGeometry();
-        const positions = [];
-        const indices = [];
+    // ── Reale Wasserflächen: Ebene auf Seehöhe → Seen/Meer exakt wo Terrain absinkt ──
+    _buildWater() {
+        const geo = new THREE.PlaneGeometry(MAP_SIZE * 1.04, MAP_SIZE * 1.04);
+        geo.rotateX(-Math.PI / 2);
+        const mat = new THREE.MeshStandardMaterial({
+            color: 0x0d3a66, transparent: true, opacity: 0.92,
+            roughness: 0.4, metalness: 0.15
+        });
+        const water = new THREE.Mesh(geo, mat);
+        water.position.y = 3.0;   // Spielmechanische Wassergrenze (h<3 = unpassierbar)
+        this.staticGroup.add(water);
+    },
 
-        const step = MAP_SIZE / 20;
-        let vertexIndex = 0;
-
-        for (let x = -MAP_SIZE / 2; x < MAP_SIZE / 2; x += step) {
-            for (let z = -MAP_SIZE / 2; z < MAP_SIZE / 2; z += step) {
-                const h = getH(x, z);
-                if (h < 3) {
-                    positions.push(x, 1, z);
-                    vertexIndex++;
+    // ── Marching Squares: Küstenlinie (h=3) + Höhenlinien ──
+    _marchingSquares(level, step) {
+        const segs = [];
+        const half = MAP_SIZE / 2;
+        for (let x = -half; x < half; x += step) {
+            for (let z = -half; z < half; z += step) {
+                const h00 = getH(x, z),         h10 = getH(x + step, z);
+                const h01 = getH(x, z + step),  h11 = getH(x + step, z + step);
+                const pts = [];
+                // Kantenschnittpunkte (lineare Interpolation)
+                if ((h00 < level) !== (h10 < level)) {
+                    const t = (level - h00) / (h10 - h00);
+                    pts.push([x + t * step, z]);
+                }
+                if ((h10 < level) !== (h11 < level)) {
+                    const t = (level - h10) / (h11 - h10);
+                    pts.push([x + step, z + t * step]);
+                }
+                if ((h01 < level) !== (h11 < level)) {
+                    const t = (level - h01) / (h11 - h01);
+                    pts.push([x + t * step, z + step]);
+                }
+                if ((h00 < level) !== (h01 < level)) {
+                    const t = (level - h00) / (h01 - h00);
+                    pts.push([x, z + t * step]);
+                }
+                if (pts.length === 2) {
+                    segs.push(pts[0], pts[1]);
+                } else if (pts.length === 4) {
+                    segs.push(pts[0], pts[1], pts[2], pts[3]);
                 }
             }
         }
+        return segs;
+    },
 
-        if (positions.length > 0) {
-            // Einfache Triangulation für Wasserflächen
-            const cols = Math.sqrt(vertexIndex);
-            for (let i = 0; i < vertexIndex - cols - 1; i++) {
-                if ((i + 1) % cols === 0) continue;
-                indices.push(i, i + cols, i + 1);
-                indices.push(i + 1, i + cols, i + cols + 1);
-            }
+    _lineSegsMesh(segs, y, mat) {
+        if (segs.length < 2) return null;
+        const arr = new Float32Array(segs.length * 3);
+        segs.forEach((p, i) => {
+            arr[i * 3] = p[0]; arr[i * 3 + 1] = y; arr[i * 3 + 2] = p[1];
+        });
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+        return new THREE.LineSegments(geo, mat);
+    },
 
-            waterGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-            if (indices.length > 0) {
-                waterGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
-            }
+    _buildContours() {
+        const step = MAP_SIZE / 90;
 
-            const waterMat = new THREE.MeshStandardMaterial({
-                color: 0x1a4a8a,
-                transparent: true,
-                opacity: 0.7,
-                roughness: 0.6,
-                metalness: 0.2
-            });
+        // Küstenlinie: kräftig hell, exakt an der Spielmechanik-Grenze h=3
+        const coastMat = new THREE.LineBasicMaterial({
+            color: 0x9fd8ff, transparent: true, opacity: 0.85
+        });
+        const coast = this._lineSegsMesh(this._marchingSquares(3, step), 3.2, coastMat);
+        if (coast) this.staticGroup.add(coast);
 
-            this.waterMesh = new THREE.Mesh(waterGeo, waterMat);
-            this.scene.add(this.waterMesh);
+        // Höhenlinien alle 4 Einheiten, jede 2. kräftiger (Index-Kontur wie auf echten Karten)
+        const minorMat = new THREE.LineBasicMaterial({
+            color: 0x3a2c14, transparent: true, opacity: 0.22
+        });
+        const majorMat = new THREE.LineBasicMaterial({
+            color: 0x40300f, transparent: true, opacity: 0.4
+        });
+        for (let h = 4, idx = 0; h < 36; h += 4, idx++) {
+            const line = this._lineSegsMesh(
+                this._marchingSquares(h, step), h + 0.3,
+                idx % 2 === 0 ? majorMat : minorMat
+            );
+            if (line) this.staticGroup.add(line);
         }
     },
 
-    createTreeMarkers() {
-        // Kleine grüne Dreiecke für Bäume
+    // ── Koordinaten-Raster ──
+    _buildGrid() {
+        const half = MAP_SIZE / 2;
+        const n = 6;
+        const pts = [];
+        for (let i = 0; i <= n; i++) {
+            const p = -half + (i / n) * MAP_SIZE;
+            pts.push([p, -half], [p, half], [-half, p], [half, p]);
+        }
+        const mat = new THREE.LineBasicMaterial({
+            color: 0x88bbdd, transparent: true, opacity: 0.12
+        });
+        const grid = this._lineSegsMesh(pts, 40, mat);
+        if (grid) this.staticGroup.add(grid);
+    },
+
+    // ── Bäume (alive-Sync pro Frame) ──
+    _buildTrees() {
+        this.treeGroup = new THREE.Group();
+        this._treeRefs = [];
         if (typeof trees === 'undefined') return;
-
-        const treeMat = new THREE.MeshBasicMaterial({ color: 0x2a8a2a });
-        const treeGeo = new THREE.ConeGeometry(2, 4, 3);
-
+        const geo = new THREE.ConeGeometry(8, 24, 4);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0x154f12, transparent: true, opacity: 0.9
+        });
+        mat._shared = true;
         trees.forEach(tree => {
-            if (!tree.alive) return;
-            const m = new THREE.Mesh(treeGeo, treeMat);
-            const pos = tree.mesh.position;
-            m.position.set(pos.x, getH(pos.x, pos.z) + 2, pos.z);
-            m.castShadow = false;
-            this.scene.add(m);
-            this.treeMarkers.push(m);
+            const m = new THREE.Mesh(geo, mat);
+            const p = tree.mesh.position;
+            m.position.set(p.x, getH(p.x, p.z) + 12, p.z);
+            this.treeGroup.add(m);
+            this._treeRefs.push({ tree, marker: m });
+        });
+        this.scene.add(this.treeGroup);
+    },
+
+    // ── Bunker ──
+    _buildBunkers() {
+        this.bunkerGroup = new THREE.Group();
+        this._bunkerRefs = [];
+        if (typeof bunkers === 'undefined') return;
+        const geo = new THREE.CylinderGeometry(50, 50, 25, 6);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0xffcc00
+        });
+        mat._shared = true;
+        bunkers.forEach(b => {
+            const m = new THREE.Mesh(geo, mat);
+            const p = b.mesh.position;
+            m.position.set(p.x, getH(p.x, p.z) + 12.5, p.z);
+            this.bunkerGroup.add(m);
+            this._bunkerRefs.push({ bunker: b, marker: m });
+        });
+        this.scene.add(this.bunkerGroup);
+    },
+
+    // ── Panzer-Marker: Richtungspfeil + HP-Balken, einmal erzeugt ──
+    _buildTanks() {
+        if (typeof teams === 'undefined') return;
+        const arrowGeo = new THREE.ConeGeometry(18, 48, 4);
+        arrowGeo.rotateX(Math.PI / 2);    // zeigt +z (= heading 0)
+        const barGeo = new THREE.PlaneGeometry(36, 6);
+        barGeo.rotateX(-Math.PI / 2);
+        barGeo.translate(0, 0, -38);
+
+        teams.forEach((team, ti) => {
+            const col = ti === 0 ? 0x00e5ff : 0xff2d55;
+            team.forEach(tank => {
+                const group = new THREE.Group();
+                const bodyMat = new THREE.MeshBasicMaterial({ color: col });
+                const body = new THREE.Mesh(arrowGeo, bodyMat);
+                // Umriss für Lesbarkeit auf hellem Terrain
+                const ringGeo = new THREE.RingGeometry(22, 28, 16);
+                ringGeo.rotateX(-Math.PI / 2);
+                const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+                    color: col, transparent: true, opacity: 0.45
+                }));
+                const hpMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+                const hpBar = new THREE.Mesh(barGeo.clone(), hpMat);
+                group.add(body, ring, hpBar);
+                this.scene.add(group);
+                this.tankMarkers.push({ tank, group, hpBar, hpMat });
+            });
         });
     },
 
-    createContourLines() {
-        // Höhenlinien alle 4 Einheiten
-        const contourGroup = new THREE.Group();
-        const lineMat = new THREE.LineBasicMaterial({
-            color: 0x6699aa,
+    // ── Kontrollpunkte: Ring + Flagge, Farbe folgt Besitzstatus ──
+    _buildCPs() {
+        if (typeof controlPoints === 'undefined') return;
+        controlPoints.forEach(cp => {
+            const group = new THREE.Group();
+            const ringGeo = new THREE.RingGeometry(CP_CAPTURE_RADIUS * 0.85, CP_CAPTURE_RADIUS, 28);
+            ringGeo.rotateX(-Math.PI / 2);
+            const ringMat = new THREE.MeshBasicMaterial({
+                color: 0xffffff, transparent: true, opacity: 0.7, side: THREE.DoubleSide
+            });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+
+            // Flagpole
+            const poleGeo = new THREE.CylinderGeometry(2.5, 2.5, 60, 5);
+            const poleMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8 });
+            const pole = new THREE.Mesh(poleGeo, poleMat);
+            pole.position.y = 30;
+
+            // Flag banner
+            const flagGeo = new THREE.BoxGeometry(3, 20, 35);
+            flagGeo.translate(0, 0, 17.5); // offset so it starts at pole and extends along Z
+            const flagMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const flag = new THREE.Mesh(flagGeo, flagMat);
+            flag.position.y = 48;
+
+            group.add(ring, pole, flag);
+            group.position.set(cp.pos.x, getH(cp.pos.x, cp.pos.z) + 2, cp.pos.z);
+            this.scene.add(group);
+            this.cpMarkers.push({ cp, group, ringMat, flagMat });
+        });
+    },
+
+    // ── Projektil-Marker & Kamerablick-Pfeil ──
+    _buildProjectileAndCam() {
+        const projGeo = new THREE.SphereGeometry(15, 8, 8);
+        const projMat = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
+        this.projMarker = new THREE.Mesh(projGeo, projMat);
+        this.projMarker.visible = false;
+        this.scene.add(this.projMarker);
+
+        // Velocity tracer line
+        const tracerGeo = new THREE.BufferGeometry();
+        const positions = new Float32Array(6); // 2 vertices, 3 coords each
+        tracerGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const tracerMat = new THREE.LineBasicMaterial({
+            color: 0xffcc00,
             transparent: true,
-            opacity: 0.4,
-            linewidth: 1
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
         });
+        this.projTracer = new THREE.Line(tracerGeo, tracerMat);
+        this.projTracer.visible = false;
+        this.scene.add(this.projTracer);
 
-        const contourInterval = 4;
-        const step = MAP_SIZE / 50;
-
-        for (let h = contourInterval; h < 35; h += contourInterval) {
-            const points = [];
-
-            for (let x = -MAP_SIZE / 2; x < MAP_SIZE / 2; x += step) {
-                for (let z = -MAP_SIZE / 2; z < MAP_SIZE / 2; z += step) {
-                    const h1 = getH(x, z);
-                    const h2 = getH(x + step, z);
-
-                    if ((h1 < h && h2 >= h) || (h1 >= h && h2 < h)) {
-                        const t = (h - h1) / (h2 - h1);
-                        points.push(new THREE.Vector3(x + t * step, h + 0.1, z));
-                    }
-                }
-            }
-
-            if (points.length > 1) {
-                const geo = new THREE.BufferGeometry();
-                geo.setAttribute('position', new THREE.BufferAttribute(
-                    new Float32Array(points.flatMap(p => [p.x, p.y, p.z])), 3
-                ));
-                const line = new THREE.Line(geo, lineMat);
-                contourGroup.add(line);
-            }
-        }
-
-        this.scene.add(contourGroup);
-        this.contourLines = contourGroup;
+        // Blickrichtung der Hauptkamera (räumliche Orientierung)
+        const wedgeGeo = new THREE.ConeGeometry(25, 60, 3);
+        wedgeGeo.rotateX(Math.PI / 2);
+        const wedgeMat = new THREE.MeshBasicMaterial({
+            color: 0xffffff, transparent: true, opacity: 0.35
+        });
+        this.camWedge = new THREE.Mesh(wedgeGeo, wedgeMat);
+        this.scene.add(this.camWedge);
     },
 
+    // ── Toggle: Button + [M]-Taste ──
     setupToggle() {
         let btn = document.getElementById('minimap-toggle');
-        if (!btn) {
-            btn = document.createElement('button');
-            btn.id = 'minimap-toggle';
-            btn.innerHTML = '🗺 TAKTIK<br><span style="font-size: 8px; opacity: 0.6;">[M]</span>';
-            btn.style.position = 'absolute';
-            btn.style.top = '14px';
-            btn.style.right = '14px';
-            btn.style.fontSize = '10px';
-            btn.style.padding = '6px 12px';
-            btn.style.zIndex = '25';
-            btn.style.background = 'rgba(0,240,255,0.08)';
-            btn.style.border = '1px solid rgba(0,240,255,0.2)';
-            btn.style.color = 'var(--p1-color)';
-            btn.style.cursor = 'pointer';
-            btn.style.transition = 'all 0.2s';
-            btn.style.letterSpacing = '1px';
-            btn.style.fontFamily = "'Orbitron', monospace";
-            btn.style.fontWeight = '600';
-            btn.style.display = 'none';
-            btn.style.lineHeight = '1.2';
-            btn.style.minWidth = '70px';
-            btn.style.textAlign = 'center';
-            document.getElementById('ui-layer').appendChild(btn);
+        if (btn) { window._minimapToggle = btn; return; }
 
-            const toggleMap = () => {
-                this.enabled = !this.enabled;
-                this.canvas.style.opacity = this.enabled ? '1' : '0.25';
-                this.canvas.style.pointerEvents = this.enabled ? 'auto' : 'none';
-                btn.style.transform = 'scale(0.95)';
-                setTimeout(() => { btn.style.transform = 'scale(1)'; }, 100);
-            };
+        btn = document.createElement('button');
+        btn.id = 'minimap-toggle';
+        document.getElementById('ui-layer').appendChild(btn);
 
-            btn.addEventListener('click', toggleMap);
+        const render = () => {
+            btn.innerHTML = `🗺️ KARTE [M]: ${this.enabled ? 'AN' : 'AUS'}`;
+        };
+        render();
 
-            btn.addEventListener('mouseenter', () => {
-                btn.style.background = 'rgba(0,240,255,0.15)';
-                btn.style.borderColor = 'rgba(0,240,255,0.5)';
-                btn.style.boxShadow = '0 0 12px rgba(0,240,255,0.2)';
-            });
-
-            btn.addEventListener('mouseleave', () => {
-                btn.style.background = 'rgba(0,240,255,0.08)';
-                btn.style.borderColor = 'rgba(0,240,255,0.2)';
-                btn.style.boxShadow = 'none';
-            });
-
-            window.addEventListener('keydown', (e) => {
-                if ((e.key.toLowerCase() === 'm' || e.key === 'ß') &&
-                    gameState !== 'MENU' && gameState !== 'TRANSITION' &&
-                    !e.target.closest('input')) {
-                    toggleMap();
-                }
-            });
-        }
+        const toggleMap = () => {
+            this.enabled = !this.enabled;
+            this.canvas.style.display = this.enabled && gameState !== 'MENU' ? 'block' : 'none';
+            if (this.closeBtn) {
+                if (this.enabled && gameState !== 'MENU') this.closeBtn.classList.add('show');
+                else this.closeBtn.classList.remove('show');
+            }
+            render();
+            btn.style.transform = 'scale(0.95)';
+            setTimeout(() => { btn.style.transform = 'scale(1)'; }, 100);
+        };
+        btn.addEventListener('click', toggleMap);
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'm' &&
+                gameState !== 'MENU' && gameState !== 'TRANSITION' &&
+                !(e.target && e.target.closest && e.target.closest('input'))) {
+                toggleMap();
+            }
+        });
         window._minimapToggle = btn;
     },
 
-    setupTooltip() {
-        this.canvas.title = 'Taktische Minimap: Terrain mit echten Seen, Höhenlinien, alle Einheiten (Panzer/Bunker/CPs/Bäume)';
+    show() {
+        if (this.canvas && this.enabled) {
+            this.canvas.style.display = 'block';
+            if (this.closeBtn) this.closeBtn.classList.add('show');
+        }
+        if (window._minimapToggle) window._minimapToggle.classList.add('show');
+        const hBtn = document.getElementById('help-toggle');
+        if (hBtn) hBtn.classList.add('show');
     },
 
-    updateGameplayElements() {
-        // Lösche alte Marker
-        this.unitMarkers.forEach(m => this.scene.remove(m));
-        this.unitMarkers = [];
+    hide() {
+        if (this.canvas) this.canvas.style.display = 'none';
+        if (this.closeBtn) this.closeBtn.classList.remove('show');
+        if (window._minimapToggle) window._minimapToggle.classList.remove('show');
+        const hBtn = document.getElementById('help-toggle');
+        if (hBtn) hBtn.classList.remove('show');
+    },
 
-        // ── Panzer mit HP-Anzeige ──
-        const drawTank = (tank, color) => {
-            if (!tank || !tank.alive) return;
+    // ── Pro Frame: nur Marker synchronisieren, nichts allokieren ──
+    draw(dt) {
+        if (!this.enabled || !this.renderer || gameState === 'MENU') return;
+        if (this.canvas.style.display === 'none') return;
 
-            const tanksGrp = new THREE.Group();
+        // Bäume & Bunker: alive-Status
+        this._treeRefs.forEach(r => { r.marker.visible = r.tree.alive; });
+        this._bunkerRefs.forEach(r => { r.marker.visible = r.bunker.alive; });
 
-            // Panzer-Körper (Kegel)
-            const bodyGeo = new THREE.ConeGeometry(5, 8, 8);
-            const bodyMat = new THREE.MeshStandardMaterial({
-                color: color,
-                emissive: color,
-                emissiveIntensity: 0.7,
-                metalness: 0.85
-            });
-            const body = new THREE.Mesh(bodyGeo, bodyMat);
-            body.rotation.x = Math.PI / 2;
-            body.rotation.y = tank.heading;
-            tanksGrp.add(body);
-
-            // HP-Balken (oben)
-            const hpPct = Math.max(0, tank.hp / tank.maxHP);
-            const hpGeo = new THREE.PlaneGeometry(8 * hpPct, 1);
-            const hpCol = hpPct > 0.6 ? 0x00ff88 : hpPct > 0.3 ? 0xffaa00 : 0xff3333;
-            const hpMat = new THREE.MeshBasicMaterial({ color: hpCol });
-            const hp = new THREE.Mesh(hpGeo, hpMat);
-            hp.position.y = 5;
-            tanksGrp.add(hp);
-
-            const pos = tank.mesh.position;
-            tanksGrp.position.set(pos.x, getH(pos.x, pos.z) + 6, pos.z);
-
-            this.scene.add(tanksGrp);
-            this.unitMarkers.push(tanksGrp);
-        };
-
-        teams.forEach((team, idx) => {
-            const color = idx === 0 ? 0x00e5ff : 0xff2d55;
-            team.forEach(tank => drawTank(tank, color));
+        // Panzer: Position, Richtung, HP, Fog of War
+        this.tankMarkers.forEach(m => {
+            const t = m.tank;
+            const fogHidden = t.team === 1 && t.mesh && !t.mesh.visible;
+            m.group.visible = t.alive && !fogHidden;
+            if (!m.group.visible) return;
+            const p = t.mesh.position;
+            m.group.position.set(p.x, getH(p.x, p.z) + 15, p.z);
+            m.group.rotation.y = t.heading;
+            const hp = Math.max(0.01, t.hp / t.maxHP);
+            m.hpBar.scale.x = hp;
+            m.hpMat.color.setHex(hp > 0.6 ? 0x00ff88 : hp > 0.3 ? 0xffaa00 : 0xff3333);
         });
 
-        // ── Bunker ──
-        if (typeof bunkers !== 'undefined') {
-            bunkers.forEach(bunker => {
-                if (!bunker.alive) return;
-                const geo = new THREE.CylinderGeometry(4, 5, 4, 6);
-                const mat = new THREE.MeshStandardMaterial({
-                    color: 0xffaa33,
-                    metalness: 0.6,
-                    roughness: 0.6
-                });
-                const mesh = new THREE.Mesh(geo, mat);
-                const pos = bunker.mesh.position;
-                mesh.position.set(pos.x, getH(pos.x, pos.z) + 2.5, pos.z);
-                this.scene.add(mesh);
-                this.unitMarkers.push(mesh);
+        // Kontrollpunkte: Besitz/Eroberung
+        this.cpMarkers.forEach(m => {
+            const cp = m.cp;
+            const col = cp.holder === 0 ? 0x00e5ff
+                : cp.holder === 1 ? 0xff2d55
+                : cp.capturingTeam === 0 ? 0x007a99
+                : cp.capturingTeam === 1 ? 0x99203a
+                : 0xc8d8e0;
+            m.ringMat.color.setHex(col);
+            m.flagMat.color.setHex(col);
+        });
+
+        // Schilde: Pool an aktuelle Anzahl angleichen
+        const sh = (typeof shields !== 'undefined') ? shields : [];
+        while (this.shieldPool.length < sh.length) {
+            const g = new THREE.SphereGeometry(1, 14, 10);
+            const mt = new THREE.MeshBasicMaterial({
+                transparent: true, opacity: 0.35, wireframe: true
             });
+            const mesh = new THREE.Mesh(g, mt);
+            this.scene.add(mesh);
+            this.shieldPool.push(mesh);
         }
+        this.shieldPool.forEach((mesh, i) => {
+            const s = sh[i];
+            mesh.visible = !!s;
+            if (!s) return;
+            mesh.position.copy(s.pos);
+            mesh.scale.setScalar(s.currentRadius);
+            mesh.material.color.setHex(s.team === 0 ? 0x00e5ff : 0xff2d55);
+        });
 
-        // ── Kontrollpunkte mit Status ──
-        if (typeof controlPoints !== 'undefined') {
-            controlPoints.forEach(cp => {
-                const grp = new THREE.Group();
+        // Projektil
+        if (this.projMarker) {
+            const liveProj = typeof projectile !== 'undefined' && projectile && projectile.visible;
+            this.projMarker.visible = !!liveProj;
+            if (this.projTracer) this.projTracer.visible = !!liveProj;
+            if (liveProj) {
+                this.projMarker.position.copy(projectile.position);
+                this.projMarker.material.color.copy(projectile.material.color);
 
-                // Flagge
-                const col = cp.holder === 0 ? 0x00e5ff : cp.holder === 1 ? 0xff2d55 : 0xffffff;
-                const flagGeo = new THREE.BoxGeometry(7, 14, 2.5);
-                const flagMat = new THREE.MeshStandardMaterial({
-                    color: col,
-                    emissive: col,
-                    emissiveIntensity: 0.9,
-                    metalness: 0.7
-                });
-                const flag = new THREE.Mesh(flagGeo, flagMat);
-                flag.position.y = 8;
-                grp.add(flag);
-
-                // Mast
-                const mastGeo = new THREE.CylinderGeometry(0.8, 0.8, 14, 4);
-                const mastMat = new THREE.MeshStandardMaterial({
-                    color: 0x777777,
-                    metalness: 0.9
-                });
-                const mast = new THREE.Mesh(mastGeo, mastMat);
-                grp.add(mast);
-
-                grp.position.copy(cp.pos);
-                grp.position.y = getH(cp.pos.x, cp.pos.z);
-
-                this.scene.add(grp);
-                this.unitMarkers.push(grp);
-            });
-        }
-
-        // ── Schilde (Sphären) ──
-        if (typeof shields !== 'undefined') {
-            shields.forEach(shield => {
-                const shieldGeo = new THREE.SphereGeometry(
-                    shield.currentRadius, 16, 12
-                );
-                const col = shield.team === 0 ? 0x00e5ff : 0xff2d55;
-                const shieldMat = new THREE.MeshBasicMaterial({
-                    color: col,
-                    transparent: true,
-                    opacity: 0.15,
-                    wireframe: true
-                });
-                const mesh = new THREE.Mesh(shieldGeo, shieldMat);
-                mesh.position.copy(shield.pos);
-                mesh.position.y = getH(shield.pos.x, shield.pos.z);
-                this.scene.add(mesh);
-                this.unitMarkers.push(mesh);
-            });
-        }
-
-        // ── Projektil mit Tracer ──
-        if (typeof projectile !== 'undefined' && projectile && projectile.visible) {
-            const projGeo = new THREE.SphereGeometry(4, 8, 8);
-            const projMat = new THREE.MeshBasicMaterial({
-                color: projectile.material.color,
-                emissive: projectile.material.color,
-                transparent: true,
-                opacity: 0.95
-            });
-            const proj = new THREE.Mesh(projGeo, projMat);
-            proj.position.copy(projectile.position);
-            this.scene.add(proj);
-            this.unitMarkers.push(proj);
-
-            // Tracer-Linie zum nächsten Punkt
-            if (typeof projectileVel !== 'undefined' && projectileVel) {
-                const nextPos = projectile.position.clone()
-                    .add(projectileVel.clone().multiplyScalar(0.08));
-                const lineGeo = new THREE.BufferGeometry();
-                lineGeo.setAttribute('position', new THREE.BufferAttribute(
-                    new Float32Array([
-                        projectile.position.x, projectile.position.y, projectile.position.z,
-                        nextPos.x, nextPos.y, nextPos.z
-                    ]), 3
-                ));
-                const lineMat = new THREE.LineBasicMaterial({
-                    color: projectile.material.color,
-                    transparent: true,
-                    opacity: 0.7,
-                    linewidth: 2
-                });
-                const line = new THREE.Line(lineGeo, lineMat);
-                this.scene.add(line);
-                this.unitMarkers.push(line);
+                if (typeof projectileVel !== 'undefined' && projectileVel) {
+                    const posAttr = this.projTracer.geometry.attributes.position;
+                    // Start of line at current projectile position
+                    posAttr.setXYZ(0, projectile.position.x, projectile.position.y, projectile.position.z);
+                    // End of line pointing backward along velocity
+                    const backVec = projectileVel.clone().multiplyScalar(-0.15);
+                    posAttr.setXYZ(1, 
+                        projectile.position.x + backVec.x, 
+                        projectile.position.y + backVec.y, 
+                        projectile.position.z + backVec.z
+                    );
+                    posAttr.needsUpdate = true;
+                    this.projTracer.material.color.copy(projectile.material.color);
+                }
             }
         }
-    },
 
-    draw(dt) {
-        if (!this.enabled || !this.renderer || !this.scene) return;
-
-        this.updateGameplayElements();
-
-        try {
-            this.renderer.render(this.scene, this.camera);
-        } catch (e) {
-            console.warn('Minimap render failed:', e);
+        // Hauptkamera-Blickrichtung
+        if (this.camWedge && typeof camera !== 'undefined') {
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            this.camWedge.position.set(camera.position.x, 60, camera.position.z);
+            this.camWedge.rotation.y = Math.atan2(dir.x, dir.z);
         }
-    },
 
-    showToggleButton() {
-        if (window._minimapToggle) {
-            window._minimapToggle.style.display = 'block';
-        }
-    },
-
-    hideToggleButton() {
-        if (window._minimapToggle) {
-            window._minimapToggle.style.display = 'none';
-        }
+        this.renderer.render(this.scene, this.camera);
     }
 };
 
-function initMinimap() {
-    Minimap.init();
-}
-
-function updateMinimap(dt) {
-    Minimap.draw(dt);
-}
+function initMinimap() { Minimap.init(); }
+function updateMinimap(dt) { Minimap.draw(dt); }
 
 window.Minimap = Minimap;

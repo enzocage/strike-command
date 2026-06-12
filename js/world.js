@@ -19,6 +19,31 @@ function rollTerrainParams(ruggedness) {
     };
 }
 
+function hash2D(x, y) {
+    const sx = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453123;
+    return sx - Math.floor(sx);
+}
+
+function valueNoise2D(x, y) {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+
+    const ux = fx * fx * (3.0 - 2.0 * fx);
+    const uy = fy * fy * (3.0 - 2.0 * fy);
+
+    const a = hash2D(ix, iy);
+    const b = hash2D(ix + 1, iy);
+    const c = hash2D(ix, iy + 1);
+    const d = hash2D(ix + 1, iy + 1);
+
+    return a * (1 - ux) * (1 - uy) +
+           b * ux * (1 - uy) +
+           c * (1 - ux) * uy +
+           d * ux * uy;
+}
+
 function calcTerrainH(x, z) {
     const tp = terrainParams;
     const maxRadius = MAP_SIZE * 0.45;
@@ -26,16 +51,27 @@ function calcTerrainH(x, z) {
     let mask = 1 - Math.pow(distFromCenter / maxRadius, 4);
     mask = Math.max(0, Math.min(1, mask));
     const amp = 0.55 + 0.45 * tp.r;
-    let h = Math.sin(x*tp.f1 + tp.p1) * 15 * amp
-          + Math.cos(z*tp.f2 + tp.p2) * 15 * amp
-          + Math.sin(x*tp.f3 + z*tp.f4 + tp.p3) * 8 * amp;
-    if(tp.ridge > 0) {
-        const rv = 1 - Math.abs(Math.sin(x*tp.f5 + z*tp.f6 + tp.p4));
-        h += rv * rv * 18 * tp.ridge;
+
+    const scale = 0.0035;
+    const nx = x * scale + tp.p1;
+    const nz = z * scale + tp.p2;
+
+    const n1 = valueNoise2D(nx, nz);
+    const n2 = valueNoise2D(nx * 2.1 + tp.p3, nz * 2.1 + tp.p4) * 0.5;
+    const n3 = valueNoise2D(nx * 4.4 - tp.p2, nz * 4.4 + tp.p1) * 0.25;
+    const n4 = valueNoise2D(nx * 8.9 + tp.p4, nz * 8.9 - tp.p3) * 0.125;
+    const noiseVal = (n1 + n2 + n3 + n4) / 1.875;
+
+    let h = noiseVal * 42 * amp;
+
+    if (tp.ridge > 0) {
+        const rVal = valueNoise2D(nx * 3.2 + tp.p4, nz * 3.2 - tp.p1);
+        const ridge = 1.0 - Math.abs(rVal * 2.0 - 1.0);
+        h += ridge * ridge * 18 * tp.ridge;
     }
-    // Mikro-Detail: feine Bodenwellen für plastischeres Terrain
+
     h += Math.sin(x*0.085 + tp.p2) * Math.cos(z*0.092 + tp.p4) * 1.8 * amp;
-    h += 20;
+    h += 12;
     return h * mask - 3;
 }
 
