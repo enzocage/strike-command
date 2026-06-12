@@ -227,7 +227,7 @@ const Minimap = {
         if (!btn) {
             btn = document.createElement('button');
             btn.id = 'minimap-toggle';
-            btn.textContent = '🗺 KARTE: AN';
+            btn.innerHTML = '🗺 KARTE: AN<br><span style="font-size: 8px; opacity: 0.6;">[M]</span>';
             btn.style.position = 'absolute';
             btn.style.top = '14px';
             btn.style.right = '14px';
@@ -243,14 +243,24 @@ const Minimap = {
             btn.style.fontFamily = "'Orbitron', monospace";
             btn.style.fontWeight = '600';
             btn.style.display = 'none';
+            btn.style.lineHeight = '1.2';
+            btn.style.minWidth = '70px';
+            btn.style.textAlign = 'center';
             document.getElementById('ui-layer').appendChild(btn);
 
-            btn.addEventListener('click', () => {
+            const toggleMap = () => {
                 this.enabled = !this.enabled;
-                btn.textContent = this.enabled ? '🗺 KARTE: AN' : '🗺 KARTE: AUS';
+                const status = this.enabled ? 'AN' : 'AUS';
+                btn.innerHTML = `🗺 KARTE: ${status}<br><span style="font-size: 8px; opacity: 0.6;">[M]</span>`;
                 this.canvas.style.opacity = this.enabled ? '1' : '0.3';
                 this.canvas.style.pointerEvents = this.enabled ? 'auto' : 'none';
-            });
+
+                // Visual feedback
+                btn.style.transform = 'scale(0.95)';
+                setTimeout(() => { btn.style.transform = 'scale(1)'; }, 100);
+            };
+
+            btn.addEventListener('click', toggleMap);
 
             btn.addEventListener('mouseenter', () => {
                 btn.style.background = 'rgba(0,240,255,0.15)';
@@ -262,6 +272,15 @@ const Minimap = {
                 btn.style.background = 'rgba(0,240,255,0.08)';
                 btn.style.borderColor = 'rgba(0,240,255,0.2)';
                 btn.style.boxShadow = 'none';
+            });
+
+            // Keyboard shortcut: M key
+            window.addEventListener('keydown', (e) => {
+                if ((e.key.toLowerCase() === 'm' || e.key === 'ß') && gameState !== 'MENU' && gameState !== 'TRANSITION') {
+                    if (!e.target.closest('input')) {
+                        toggleMap();
+                    }
+                }
             });
         }
         window._minimapToggle = btn;
