@@ -771,6 +771,30 @@ input[type=range]::-webkit-slider-thumb {
 .stats-btn { width: 100%; padding: 14px; font-family: 'Orbitron', monospace; font-size: 13px; letter-spacing: 3px; background: rgba(0,240,255,0.08); border: 1px solid rgba(0,240,255,0.3); color: var(--p1-color); cursor: pointer; border-radius: 3px; transition: all 0.2s; text-transform: uppercase; }
 .stats-btn:hover { background: rgba(0,240,255,0.15); box-shadow: 0 0 20px rgba(0,240,255,0.2); }
 
+/* ── Minimap ── */
+#minimap-canvas {
+    position: fixed; top: 14px; right: 14px;
+    width: 280px; height: 280px;
+    border: 2px solid rgba(0, 240, 255, 0.4);
+    border-radius: 4px;
+    background: #0a1520;
+    z-index: 40;
+    box-shadow: 0 0 24px rgba(0, 240, 255, 0.15), inset 0 0 20px rgba(0, 0, 0, 0.8);
+    display: none;
+    transition: opacity 0.3s;
+    pointer-events: auto;
+    cursor: crosshair;
+}
+#minimap-canvas.visible {
+    display: block;
+}
+#minimap-toggle {
+    display: none !important;
+}
+#minimap-toggle.show {
+    display: block !important;
+}
+
 /* ── Wetter-Effekte ── */
 #rain-canvas {
     position: absolute; top: 0; left: 0;

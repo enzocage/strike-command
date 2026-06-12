@@ -50,6 +50,7 @@ function init() {
     spawnTrees(); spawnBunkers(); // Menü-Hintergrund
     setupFX();
     initVisualEnhancements();
+    initMinimap();
     TacFeed.init();
     LightingDirector.init();
     Cam.init();
@@ -382,6 +383,11 @@ function showStatsScreen(winner) {
         row('CP-Runden gehalten', s1.cpTurns, p2Col) +
         '</div>';
 
+    // Minimap verstecken
+    const mmCanvas = document.getElementById('minimap-canvas');
+    if (mmCanvas) mmCanvas.classList.remove('visible');
+    if (window._minimapToggle) window._minimapToggle.classList.remove('show');
+
     screen.classList.add('visible'); Audio.play('victory');
 }
 
@@ -436,6 +442,15 @@ function startGame() {
     assignAIRoles();
     assignPlayerRoles();
     updateRoleIcons();
+
+    // Minimap anzeigen
+    const mmCanvas = document.getElementById('minimap-canvas');
+    if (mmCanvas) {
+        mmCanvas.classList.add('visible');
+        Minimap.updateSize();
+    }
+    if (window._minimapToggle) window._minimapToggle.classList.add('show');
+
     setTimeout(announceTurn, 500);
 }
 
@@ -1388,6 +1403,7 @@ function animate() {
     }
 
     updateVisualEffects(dt);
+    updateMinimap(dt);
     renderer.render(scene, camera);
 }
 
