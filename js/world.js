@@ -1,23 +1,70 @@
 function PlaneGeometryMod(w, h, ws, hs) { return new THREE.PlaneGeometry(w, h, ws, hs); }
 
-function createWorld() {
+// ─── Prozedurales Terrain: zufällige Phasen/Frequenzen pro Partie,
+//     Amplitude und Bergrücken skalieren mit der Schwierigkeits-Rauheit ───
+let terrainParams = null;
+
+function rollTerrainParams(ruggedness) {
+    const P = () => Math.random() * Math.PI * 2;
+    terrainParams = {
+        r: ruggedness,
+        p1: P(), p2: P(), p3: P(), p4: P(),
+        f1: 0.010 + Math.random() * 0.006,
+        f2: 0.011 + Math.random() * 0.007,
+        f3: 0.030 + Math.random() * 0.016,
+        f4: 0.024 + Math.random() * 0.012,
+        f5: 0.006 + Math.random() * 0.004,
+        f6: 0.007 + Math.random() * 0.004,
+        ridge: Math.max(0, ruggedness - 1.0)
+    };
+}
+
+function calcTerrainH(x, z) {
+    const tp = terrainParams;
+    const maxRadius = MAP_SIZE * 0.45;
+    const distFromCenter = Math.sqrt(x*x + z*z);
+    let mask = 1 - Math.pow(distFromCenter / maxRadius, 4);
+    mask = Math.max(0, Math.min(1, mask));
+    const amp = 0.55 + 0.45 * tp.r;
+    let h = Math.sin(x*tp.f1 + tp.p1) * 15 * amp
+          + Math.cos(z*tp.f2 + tp.p2) * 15 * amp
+          + Math.sin(x*tp.f3 + z*tp.f4 + tp.p3) * 8 * amp;
+    if(tp.ridge > 0) {
+        const rv = 1 - Math.abs(Math.sin(x*tp.f5 + z*tp.f6 + tp.p4));
+        h += rv * rv * 18 * tp.ridge;
+    }
+    h += 20;
+    return h * mask - 3;
+}
+
+function disposeWorldMeshes() {
+    [terrain, water, window._foamRing].forEach(m => {
+        if(m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+    });
+    terrain = null; water = null; window._foamRing = null;
+    if(cloudsGroup) {
+        scene.remove(cloudsGroup);
+        cloudsGroup.traverse(c => { if(c.isMesh) c.geometry.dispose(); });
+        cloudsGroup = null;
+    }
+}
+
+function createWorld(cfg) {
+    cfg = cfg || diffCfg();
+    MAP_SIZE = cfg.mapSize;
+    disposeWorldMeshes();
+    rollTerrainParams(cfg.ruggedness);
+    if(scene.fog) scene.fog.density = 1.44 / MAP_SIZE;
+
     let geo = new PlaneGeometryMod(MAP_SIZE, MAP_SIZE, SEGMENTS, SEGMENTS);
     geo.rotateX(-Math.PI/2);
-    geo = geo.toNonIndexed(); 
-    
+    geo = geo.toNonIndexed();
+
     const pos = geo.attributes.position.array;
     const colors = new Float32Array(pos.length);
     heightData = new Float32Array((SEGMENTS+1)*(SEGMENTS+1));
-    
-    const maxRadius = MAP_SIZE * 0.45;
 
-    const calcH = (x, z) => {
-        const distFromCenter = Math.sqrt(x*x + z*z);
-        let mask = 1 - Math.pow(distFromCenter / maxRadius, 4); 
-        mask = Math.max(0, Math.min(1, mask));
-        let h = (Math.sin(x*0.012)*15 + Math.cos(z*0.015)*15 + Math.sin(x*0.04 + z*0.03)*8) + 20;
-        return h * mask - 3; 
-    };
+    const calcH = calcTerrainH;
 
     for(let iz=0; iz<=SEGMENTS; iz++) {
         for(let ix=0; ix<=SEGMENTS; ix++) {
@@ -138,9 +185,8 @@ varying vec2  vUv2;
     const foamRing = new THREE.Mesh(foamGeo, foamMat);
     foamRing.position.y = -1.2;
     scene.add(foamRing);
+    window._foamRing = foamRing;
 
-    spawnTrees();
-    spawnBunkers();
     spawnClouds();
 }
 
@@ -227,7 +273,8 @@ function spawnClouds() {
     scene.add(cloudsGroup);
 }
 
-function spawnTrees() {
+function spawnTrees(count) {
+    count = count || diffCfg().treeCount;
     const trunkGeo = new THREE.CylinderGeometry(1.5, 2, 10, 5); trunkGeo.translate(0, 5, 0);
     const leavesGeo1 = new THREE.ConeGeometry(9, 20, 5); leavesGeo1.translate(0, 15, 0);
     const leavesGeo2 = new THREE.ConeGeometry(7, 18, 5); leavesGeo2.translate(0, 25, 0);
@@ -240,11 +287,15 @@ function spawnTrees() {
     });
     window._treeLeavesMat = leavesMat;
 
-    for(let i=0; i<250; i++) { 
+    // Zufallspositionen verwerfen oft (Wasser/Gipfel) — daher Versuche statt fixe Schleife
+    let placedTrees = 0, treeTries = 0;
+    while(placedTrees < count && treeTries < count * 12) {
+        treeTries++;
         const x = (Math.random()-0.5) * MAP_SIZE * 0.7;
         const z = (Math.random()-0.5) * MAP_SIZE * 0.7;
         const h = getH(x,z);
-        if(h > 3 && h < 25) { 
+        if(h > 3 && h < 25) {
+            placedTrees++;
             const treeGroup = new THREE.Group();
             const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.castShadow = true;
             const l1 = new THREE.Mesh(leavesGeo1, leavesMat); l1.castShadow = true;
@@ -261,7 +312,8 @@ function spawnTrees() {
     }
 }
 
-function spawnBunkers() {
+function spawnBunkers(count) {
+    count = count || diffCfg().bunkerCount;
     const bMat = new THREE.MeshStandardMaterial({color: 0x2e2e2e, roughness: 0.9, metalness: 0.2, flatShading: true});
     const darkMat = new THREE.MeshStandardMaterial({color: 0x040404, roughness: 1.0, flatShading: true});
     const slitGlowMat = new THREE.MeshStandardMaterial({
@@ -278,11 +330,14 @@ function spawnBunkers() {
     const bRoof = new THREE.Mesh(roofGeo, bMat); bRoof.castShadow = true; bRoof.receiveShadow = true;
     const bSlit = new THREE.Mesh(slitGeo, slitGlowMat || darkMat);
 
-    for(let i=0; i<16; i++) { 
+    let placedBunkers = 0, bunkerTries = 0;
+    while(placedBunkers < count && bunkerTries < count * 40) {
+        bunkerTries++;
         const x = (Math.random()-0.5) * MAP_SIZE * 0.6;
         const z = (Math.random()-0.5) * MAP_SIZE * 0.6;
         const h = getH(x,z);
-        if(h > 3 && h < 20) {
+        if(h > 3 && h < 26) {
+            placedBunkers++;
             const b = new THREE.Group();
             b.add(bBase.clone()); b.add(bRoof.clone()); b.add(bSlit.clone());
             b.position.set(x, h - 3, z);
@@ -318,11 +373,27 @@ function spawnControlPoints() {
     cpMeshes = [];
     controlPoints = [];
 
-    const positions = [
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(-250, 0, -250),
-        new THREE.Vector3(250, 0, 250)
-    ];
+    // Prozedurale Verteilung: ein CP im Zentrum, die übrigen auf einem Ring
+    // mit zufälligem Startwinkel. Punkte im Wasser werden an Land geschoben.
+    const num = diffCfg().numControlPoints;
+    const positions = [new THREE.Vector3(0, 0, 0)];
+    const ringR = MAP_SIZE * 0.21;
+    const a0 = Math.random() * Math.PI * 2;
+    for(let i = 1; i < num; i++) {
+        const ang = a0 + (i - 1) * (Math.PI * 2 / (num - 1));
+        positions.push(new THREE.Vector3(Math.cos(ang) * ringR, 0, Math.sin(ang) * ringR));
+    }
+    positions.forEach(p => {
+        if(getH(p.x, p.z) > 2) return;
+        for(let r = 30; r <= 300; r += 30) {
+            let found = false;
+            for(let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+                const nx = p.x + Math.cos(a) * r, nz = p.z + Math.sin(a) * r;
+                if(getH(nx, nz) > 3) { p.x = nx; p.z = nz; found = true; break; }
+            }
+            if(found) break;
+        }
+    });
 
     positions.forEach((p, i) => {
         p.y = getH(p.x, p.z) + 1;
@@ -364,7 +435,7 @@ function updateControlPoints() {
     let p1Holds = 0, p2Holds = 0;
     const statusEl = document.getElementById('cp-status');
     statusEl.innerHTML = '';
-    const names = ['ALPHA', 'BRAVO', 'CHARLIE'];
+    const names = ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO'];
 
     controlPoints.forEach((cp, i) => {
         const isShielded = (team, tank) =>
@@ -458,9 +529,7 @@ function updateControlPoints() {
         statusEl.appendChild(div);
     });
 
-    const p1Alive = teams[0].filter(t => t.alive).length;
-    const p2Alive = teams[1].filter(t => t.alive).length;
-    window._cpWinThreshold = CP_POINTS_TO_WIN + Math.floor(Math.max(p1Alive, p2Alive) * 0.5);
+    window._cpWinThreshold = diffCfg().cpWinPoints;
 
     cpScores[0] += p1Holds;
     cpScores[1] += p2Holds;

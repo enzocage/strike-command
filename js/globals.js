@@ -22,7 +22,7 @@ let navGrid = [];
 const keys = {};
 
 let isSinglePlayer = false;
-let aiDifficulty = 2; // 1: Easy, 2: Medium, 3: Hard
+let aiDifficulty = 2; // 1: Rekrut, 2: Veteran, 3: Elite, 4: Albtraum (siehe difficulty.js)
 
 // ─── Aktionspunkte ───
 let apRemaining = 3;
@@ -31,7 +31,7 @@ let apUsedFire = false;
 
 // ─── Munitionstypen ───
 let selectedAmmo = 'standard';
-let ammoInventory = {};
+let ammoInventory = [{}, {}]; // getrennte Vorräte: [Spieler/Team1, KI/Team2]
 let smokeScreens = [];
 let fogOfWarEnabled = true;
 let killsThisTurn = 0; // Kettenbonus-Tracking

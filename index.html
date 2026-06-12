@@ -30,11 +30,17 @@
         </div>
         <div id="ai-opts" style="display:none;">
             <p style="margin-top:0;">KI Schwierigkeit</p>
-            <button onclick="startGameMode(1)">&#9655; Leicht</button>
+            <button onclick="startGameMode(1)">&#9655; Rekrut
+                <span class="diff-desc">Kleine Karte &middot; Volle Sicht &middot; Passive KI</span></button>
             <div style="height: 8px;"></div>
-            <button onclick="startGameMode(2)">&#9655; Mittel</button>
+            <button onclick="startGameMode(2)">&#9655; Veteran
+                <span class="diff-desc">Nebel des Krieges &middot; 2 KI-Z&uuml;ge pro Runde</span></button>
             <div style="height: 8px;"></div>
-            <button onclick="startGameMode(3)" style="border-color:rgba(255,45,85,0.5); color:#ff8099;">&#9655; Schwer</button>
+            <button onclick="startGameMode(3)" style="border-color:rgba(255,45,85,0.5); color:#ff8099;">&#9655; Elite
+                <span class="diff-desc">Gro&szlig;e Karte &middot; 4 CPs &middot; 3 KI-Z&uuml;ge &middot; Deckungstaktik</span></button>
+            <div style="height: 8px;"></div>
+            <button onclick="startGameMode(4)" style="border-color:rgba(190,40,255,0.55); color:#d088ff;">&#9655; Albtraum
+                <span class="diff-desc">Riesige Karte &middot; 5 CPs &middot; 4 KI-Z&uuml;ge &middot; Gnadenlos pr&auml;zise</span></button>
             <div style="height: 14px;"></div>
             <button onclick="showMenuOpts()" style="background:rgba(255,255,255,0.03); color:rgba(255,255,255,0.35); font-size:11px;">&#8592; Zurück</button>
         </div>
@@ -62,7 +68,7 @@
                         <span class="rules-section-title">Ziel des Spiels</span>
                     </div>
                     <div class="rules-section-body">
-                        Es gibt <strong>zwei Wege zum Sieg</strong>: Entweder vernichtest du alle feindlichen Panzer, oder du erreichst als Erster <span class="hl-gold">8 Kontrollpunkt-Punkte</span>. Punkte werden pro Runde vergeben &#8212; für jeden Kontrollpunkt den du hältst, erhältst du einen punkt. Wer zuerst ein Ziel erreicht, gewinnt sofort.
+                        Es gibt <strong>zwei Wege zum Sieg</strong>: Entweder vernichtest du alle feindlichen Panzer, oder du erreichst als Erster die <span class="hl-gold">Kontrollpunkt-Siegschwelle</span> (10&#8211;14 Punkte je nach Schwierigkeit). Punkte werden pro Runde vergeben &#8212; für jeden Kontrollpunkt, den du hältst, erhältst du einen Punkt. Wer zuerst ein Ziel erreicht, gewinnt sofort.
                     </div>
                 </div>
 
@@ -150,11 +156,11 @@
                         <span class="rules-section-title">Kontrollpunkte</span>
                     </div>
                     <div class="rules-section-body">
-                        Auf der Karte befinden sich <strong>3 Kontrollpunkte</strong>: <span class="hl">Alpha</span>, <span class="hl">Bravo</span> und <span class="hl">Charlie</span>. Sie sind an leuchtenden Bodenringen erkennbar.
+                        Auf der Karte befinden sich <strong>3 bis 5 Kontrollpunkte</strong> (je nach Schwierigkeit): <span class="hl">Alpha</span>, <span class="hl">Bravo</span>, <span class="hl">Charlie</span>, <span class="hl">Delta</span>, <span class="hl">Echo</span>. Sie sind an leuchtenden Bodenringen erkennbar und werden jede Partie neu verteilt.
                         <br><br>
                         <strong>Einnehmen:</strong> Bewege einen Panzer in den Ring. Solange kein Feind ebenfalls im Ring ist, gehört der Punkt dir. Bei gleichzeitiger Präsenz beider Seiten gilt er als <span class="hl-gold">Umkämpft</span> &#8212; niemand bekommt Punkte.
                         <br><br>
-                        <strong>Punktevergabe:</strong> Am Ende jeder Runde erhält jede Seite +1 Punkt für jeden von ihr gehaltenen Kontrollpunkt. Wer <span class="hl-gold">8 Punkte</span> zuerst erreicht, gewinnt &#8212; auch wenn noch Feindpanzer leben.
+                        <strong>Punktevergabe:</strong> Am Ende jeder Runde erhält jede Seite +1 Punkt für jeden von ihr gehaltenen Kontrollpunkt. Wer die <span class="hl-gold">Siegschwelle</span> (Rekrut: 14, Veteran: 12, Elite: 11, Albtraum: 10) zuerst erreicht, gewinnt &#8212; auch wenn noch Feindpanzer leben.
                         <div class="rules-tip">Halte mehrere Kontrollpunkte gleichzeitig, um Punkte zu stapeln. Mit 3 gehaltenen Punkten gewinnst du in nur 3 Runden!</div>
                     </div>
                 </div>
@@ -166,9 +172,9 @@
                         <span class="rules-section-title">Schild</span>
                     </div>
                     <div class="rules-section-body">
-                        Jede Seite hat <strong>3 Schilde</strong> pro Partie. Ein aktivierter Schild erzeugt eine große Halbkugel, die Projektile ablenkt.
+                        Du hast <strong>2 Schilde</strong> pro Partie, die KI je nach Schwierigkeit 1&#8211;3. Ein aktivierter Schild erzeugt eine große Halbkugel, die Projektile abfängt.
                         <br><br>
-                        <strong>Schrumpfen:</strong> Der Schild wird nach jeder eigenen Runde um 10% kleiner und verschwindet nach 8 Runden automatisch. Setze ihn ein, während er am größten ist!
+                        <strong>Schrumpfen:</strong> Der Schild wird nach jeder eigenen Runde um 10% kleiner und verschwindet nach 5 Runden automatisch. Setze ihn ein, während er am größten ist!
                         <br><br>
                         <strong>Kosten:</strong> 2 AP &#8212; du kannst in diesem Zug dann nicht mehr feuern.
                         <div class="rules-tip">Ein Schild schützt alle eigenen Panzer innerhalb seines Radius. Gruppiere deine Truppen um einen geschirmten Panzer für maximale Wirkung.</div>
@@ -186,7 +192,7 @@
                         <br><br>
                         <strong>Wasser</strong> am Kartenrand ist nicht befahrbar. <strong>Steile Hänge</strong> verlangsamen Panzer deutlich. Höhenunterschiede beeinflussen die Flugbahn &#8212; ein tiefer stehender Feind ist leichter zu treffen.
                         <br><br>
-                        <strong>Nebel des Krieges:</strong> Du siehst nur deinen aktiven Panzer im HUD. Feindpanzer haben keine Gesundheitsanzeige, solange es nicht dein Zug ist.
+                        <strong>Nebel des Krieges:</strong> Ab Veteran sind KI-Panzer nur sichtbar, wenn einer deiner Panzer sie in Sichtweite hat &#8212; oder wenn sie gerade gefeuert haben (Mündungsfeuer enttarnt für ~7 Sekunden). Feindpanzer haben zudem keine Gesundheitsanzeige, solange es nicht dein Zug ist.
                         <div class="rules-tip">Nutze den höheren Neigungswinkel (70&#8211;85&#176;) um über Hügel und Bunker hinwegzuschießen. Flache Schussbahnen sind schiller, aber riskanter.</div>
                     </div>
                 </div>
@@ -198,13 +204,15 @@
                         <span class="rules-section-title">KI-Schwierigkeitsgrade</span>
                     </div>
                     <div class="rules-section-body">
+                        Jede Stufe verändert nicht nur die KI, sondern die ganze Schlacht: Kartengröße, Geländeform, Anzahl der Kontrollpunkte, Sichtweiten und Ressourcen.
                         <table class="rules-table">
-                            <tr><th>Schwierigkeit</th><th>Sichtweite</th><th>Zielgenauigkeit</th><th>Verhalten</th></tr>
-                            <tr><td><span class="rules-tag rules-tag-blue">LEICHT</span></td><td>Klein</td><td>Stark zufällig</td><td>Patrouilliert, zielt ungenau</td></tr>
-                            <tr><td><span class="rules-tag rules-tag-gold">MITTEL</span></td><td>Mittel</td><td>Moderat</td><td>Navigiert aktiv zu Zielen</td></tr>
-                            <tr><td><span class="rules-tag rules-tag-red">SCHWER</span></td><td>Groß</td><td>Sehr präzise</td><td>Setzt Schilde ein, sucht optimalen Schuss</td></tr>
+                            <tr><th>Stufe</th><th>Karte</th><th>Sicht (Du / KI)</th><th>KI-Verhalten</th></tr>
+                            <tr><td><span class="rules-tag rules-tag-blue">REKRUT</span></td><td>Klein, sanfte Hügel, 3 CPs</td><td>Alles / Klein</td><td>1 Panzer pro Runde, streut stark, keine Spezialmunition</td></tr>
+                            <tr><td><span class="rules-tag rules-tag-gold">VETERAN</span></td><td>Mittel, 3 CPs</td><td>45% / 40%</td><td>2 Panzer pro Runde, nutzt Schilde im Notfall</td></tr>
+                            <tr><td><span class="rules-tag rules-tag-red">ELITE</span></td><td>Groß, zerklüftet, 4 CPs</td><td>34% / 62%</td><td>3 Panzer pro Runde, sucht Deckung, meidet blockierte Schüsse, kontert CP-Siege</td></tr>
+                            <tr><td><span class="rules-tag rules-tag-red">ALBTRAUM</span></td><td>Riesig, Bergrücken, 5 CPs</td><td>28% / 85%</td><td>4 Panzer pro Runde, fast perfekte Präzision, mehr HP &amp; Munition</td></tr>
                         </table>
-                        <div class="rules-tip">Gegen die Schwer-KI lohnt es sich, Rauchgranaten zu nutzen &#8212; sie kann keine Ziele außerhalb ihrer Sichtweite angreifen.</div>
+                        <div class="rules-tip">Im Nebel des Krieges siehst du KI-Panzer nur in Sichtweite deiner eigenen Panzer &#8212; aber jeder KI-Schuss verrät die Position des Schützen für einige Sekunden. Rauchgranaten blenden umgekehrt die KI.</div>
                     </div>
                 </div>
 
@@ -336,6 +344,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/globals.js"></script>
 <script src="js/constants.js"></script>
+<script src="js/difficulty.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/tacfeed.js"></script>
 <script src="js/lighting.js"></script>

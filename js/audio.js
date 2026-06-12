@@ -10,8 +10,9 @@ function makeDistortionCurve(amount) {
 const Audio = {
     ctx: null,
     master: null,
-    // Motor-Nodes (immer aktiv wenn Tank fährt)
-    engineOsc: null, engineGain: null, engineRunning: false, _e2: null,
+    // Motor (aktiv wenn Tank fährt) — engine bündelt alle Nodes,
+    // engineOsc bleibt als Kompatibilitäts-Referenz erhalten
+    engine: null, engineOsc: null, engineRunning: false,
     // Ambient-Drone (Hintergrundatmosphäre)
     ambientNode: null, ambientGain: null,
     // Projektil-Whistle (während Schuss fliegt)
@@ -491,63 +492,132 @@ const Audio = {
         }
     },
 
+    // ── Panzermotor: Diesel-Knattern statt statischem Drone ──
+    // Aufbau: Zündpuls-LFO (Sägezahn → Puls-Former) moduliert die Lautstärke
+    // eines Layer-Busses aus Sub-Fundament, Block-Rumpeln, verzerrtem Growl
+    // und Auspuff-Rauschen. Ein Rausch-Jitter macht die Drehzahl unregelmäßig,
+    // ein leises Getriebesirren läuft unmoduliert obendrauf.
     setEngineRunning(isRunning) {
         if(!this.ctx) return;
-        if(isRunning && !this.engineOsc) {
-            // Basis-Diesel-Sound: Sägezahn + Square + Oberton
-            this.engineOsc  = this._osc('sawtooth', 38);
-            this._e2        = this._osc('square', 76);
-            this._e3        = this._osc('triangle', 152);
-            this.engineGain = this._g(0);
-            const f1 = this._f('lowpass', 220);
-            const f2 = this._f('lowpass', 400);
-            const g2 = this._g(0.28);
-            const g3 = this._g(0.12);
-            this.engineOsc.connect(f1); f1.connect(this.engineGain);
-            this._e2.connect(g2); g2.connect(this.engineGain);
-            this._e3.connect(g3); g3.connect(this.engineGain);
-            this.engineGain.connect(this._o());
-            this.engineOsc.start(); this._e2.start(); this._e3.start();
-            this.engineGain.gain.linearRampToValueAtTime(0.22, this.ctx.currentTime + 0.5);
-            // Anlauf-Geräusch
+        const C = this.ctx;
+        if(isRunning && !this.engine) {
+            const E = {};
+            E.master = this._g(0);
+            E.master.connect(this._o());
+
+            // Zündpuls: Sägezahn-Rampe → scharfe Spitze einmal pro Zyklus
+            E.chug = this._osc('sawtooth', 11);
+            E.chugShaper = C.createWaveShaper();
+            const pn = 1024, pc = new Float32Array(pn);
+            for(let i = 0; i < pn; i++) { const x = i / (pn - 1); pc[i] = Math.pow(x, 5) * 2 - 1; }
+            E.chugShaper.curve = pc;
+            E.chugDepth = this._g(0.4);
+            E.bus = this._g(0.55); // Basis-Pegel, vom Zündpuls auf-/abmoduliert
+            E.chug.connect(E.chugShaper); E.chugShaper.connect(E.chugDepth);
+            E.chugDepth.connect(E.bus.gain);
+            E.bus.connect(E.master);
+
+            // Drehzahl-Jitter: tieffrequentes Rauschen auf Zündrate und Tonhöhe
+            E.jitterSrc = this._src(this._nb(2, true)); E.jitterSrc.loop = true;
+            E.jitterFilt = this._f('lowpass', 6);
+            E.jitterChug = this._g(2.2);
+            E.jitterPitch = this._g(1.4);
+            E.jitterSrc.connect(E.jitterFilt);
+            E.jitterFilt.connect(E.jitterChug); E.jitterChug.connect(E.chug.frequency);
+            E.jitterFilt.connect(E.jitterPitch);
+
+            // Sub-Fundament
+            E.sub = this._osc('sine', 15); E.subG = this._g(0.6);
+            E.sub.connect(E.subG); E.subG.connect(E.bus);
+            // Block-Rumpeln (Grundton)
+            E.fund = this._osc('sawtooth', 30); E.fundLP = this._f('lowpass', 150); E.fundG = this._g(0.5);
+            E.jitterPitch.connect(E.fund.frequency);
+            E.fund.connect(E.fundLP); E.fundLP.connect(E.fundG); E.fundG.connect(E.bus);
+            // Growl: leicht verstimmt + verzerrt — Schwebung gegen den Grundton
+            E.growl = this._osc('sawtooth', 30.4); E.growlDist = C.createWaveShaper();
+            E.growlDist.curve = makeDistortionCurve(40);
+            E.growlLP = this._f('lowpass', 320); E.growlG = this._g(0.22);
+            E.growl.connect(E.growlDist); E.growlDist.connect(E.growlLP);
+            E.growlLP.connect(E.growlG); E.growlG.connect(E.bus);
+            // Auspuff-Rasseln: rosa Rauschen, bandbegrenzt
+            E.exh = this._src(this._nb(2.5, true)); E.exh.loop = true;
+            E.exhBP = this._f('bandpass', 200, 0.6); E.exhG = this._g(0.45);
+            E.exh.connect(E.exhBP); E.exhBP.connect(E.exhG); E.exhG.connect(E.bus);
+            // Getriebesirren (leise, nicht puls-moduliert)
+            E.whine = this._osc('triangle', 270); E.whineHP = this._f('highpass', 350); E.whineG = this._g(0.0);
+            E.whine.connect(E.whineHP); E.whineHP.connect(E.whineG); E.whineG.connect(E.master);
+
+            [E.chug, E.sub, E.fund, E.growl, E.whine].forEach(o => o.start());
+            E.jitterSrc.start(); E.exh.start();
+
+            E.master.gain.linearRampToValueAtTime(0.28, C.currentTime + 0.45);
+            this.engine = E;
+            this.engineOsc = E.fund; // Kompatibilität
             this.play('engineStart');
-        } else if(!isRunning && this.engineOsc) {
-            this.engineGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.5);
-            setTimeout(()=>{
-                if(this.engineOsc){this.engineOsc.stop(); this.engineOsc=null;}
-                if(this._e2){this._e2.stop(); this._e2=null;}
-                if(this._e3){this._e3.stop(); this._e3=null;}
-            }, 520);
+        } else if(!isRunning && this.engine) {
+            const E = this.engine;
+            E.master.gain.cancelScheduledValues(C.currentTime);
+            E.master.gain.setTargetAtTime(0, C.currentTime, 0.15);
+            setTimeout(() => {
+                [E.chug, E.sub, E.fund, E.growl, E.whine, E.jitterSrc, E.exh]
+                    .forEach(n => { try { n.stop(); } catch(e) {} });
+                E.master.disconnect();
+            }, 600);
+            this.engine = null;
+            this.engineOsc = null;
         }
     },
 
     // Echtzeit Motor-Pitch Update — aufgerufen im Animate-Loop
     updateEnginePitch(speed, maxSpeed) {
-        if(!this.ctx || !this.engineOsc) return;
+        if(!this.ctx || !this.engine) return;
+        const E = this.engine, t = this.ctx.currentTime;
         const norm = Math.min(1.0, Math.abs(speed) / maxSpeed);
-        // Leerlauf 38Hz → Vollgas 85Hz
-        const baseFreq = 38 + norm * 47;
-        const t = this.ctx.currentTime;
-        this.engineOsc.frequency.setTargetAtTime(baseFreq,      t, 0.08);
-        this._e2.frequency.setTargetAtTime(baseFreq*2,          t, 0.08);
-        if(this._e3) this._e3.frequency.setTargetAtTime(baseFreq*4, t, 0.08);
-        // Lautstärke beim Gas geben leicht erhöhen
-        const vol = 0.18 + norm * 0.12;
-        this.engineGain.gain.setTargetAtTime(vol, t, 0.12);
+        // Drehzahl: Leerlauf 30 Hz → Volllast 58 Hz
+        const f = 30 + norm * 28;
+        E.fund.frequency.setTargetAtTime(f, t, 0.1);
+        E.growl.frequency.setTargetAtTime(f * 1.013, t, 0.1);
+        E.sub.frequency.setTargetAtTime(f * 0.5, t, 0.1);
+        // Zündfolge: träges Leerlauf-Knattern → schnelles Hämmern unter Last
+        E.chug.frequency.setTargetAtTime(10 + norm * 14, t, 0.1);
+        // Unter Last wird der Puls flacher (Motor läuft "runder")
+        E.chugDepth.gain.setTargetAtTime(0.42 - norm * 0.18, t, 0.15);
+        E.bus.gain.setTargetAtTime(0.55 + norm * 0.15, t, 0.15);
+        // Auspuff öffnet mit der Last
+        E.exhBP.frequency.setTargetAtTime(180 + norm * 240, t, 0.12);
+        E.exhG.gain.setTargetAtTime(0.4 + norm * 0.5, t, 0.12);
+        // Getriebesirren steigt mit der Geschwindigkeit
+        E.whine.frequency.setTargetAtTime(f * 9, t, 0.1);
+        E.whineG.gain.setTargetAtTime(0.012 + norm * 0.05, t, 0.12);
+        E.master.gain.setTargetAtTime(0.26 + norm * 0.14, t, 0.12);
     },
 
-    // Ketten-Rost-Geräusch beim Fahren über Gelände
+    // Kettengeräusch: dumpfes Glieder-Klacken + Boden-Wummern + seltenes Quietschen
     _trackTimer: 0,
     updateTrackSound(speed, dt) {
         if(!this.ctx || Math.abs(speed) < 1) return;
         this._trackTimer = (this._trackTimer||0) + dt;
-        const interval = 0.18 / (0.4 + Math.abs(speed)/30);
+        const interval = 0.16 / (0.4 + Math.abs(speed)/30);
         if(this._trackTimer >= interval) {
             this._trackTimer = 0;
-            // Kurzes Metall-Klirren
             const C=this.ctx, t=C.currentTime, OUT=this._o();
-            const ni=this._src(this._nb(0.018)),nif=this._f('bandpass',1400+Math.random()*600,2.2),nig=this._g(0.08+Math.random()*0.04);
-            nig.gain.exponentialRampToValueAtTime(0.001,t+0.018); ni.connect(nif); nif.connect(nig); nig.connect(OUT); ni.start(t);
+            // Dumpfes Ketten-Klacken (Glied auf Laufrolle)
+            const ni=this._src(this._nb(0.03)),nif=this._f('bandpass',650+Math.random()*500,1.1),nig=this._g(0.07+Math.random()*0.05);
+            nig.gain.exponentialRampToValueAtTime(0.001,t+0.03);
+            ni.connect(nif); nif.connect(nig); nig.connect(OUT); ni.start(t);
+            // Boden-Wummern: jedes Glied drückt in den Untergrund
+            const th=this._osc('sine',55+Math.random()*20),thg=this._g(0.085);
+            th.frequency.exponentialRampToValueAtTime(30,t+0.07);
+            thg.gain.exponentialRampToValueAtTime(0.001,t+0.07);
+            th.connect(thg); thg.connect(OUT); th.start(t); th.stop(t+0.08);
+            // Gelegentliches Metall-Quietschen der Kette
+            if(Math.random() < 0.07) {
+                const sq=this._osc('sine',900+Math.random()*500),sqg=this._g(0);
+                sq.frequency.linearRampToValueAtTime(600+Math.random()*300,t+0.18);
+                sqg.gain.setValueAtTime(0,t); sqg.gain.linearRampToValueAtTime(0.025,t+0.04);
+                sqg.gain.exponentialRampToValueAtTime(0.001,t+0.2);
+                sq.connect(sqg); sqg.connect(OUT); sq.start(t); sq.stop(t+0.22);
+            }
         }
     }
 };
@@ -558,12 +628,25 @@ Audio.play = (function(origPlay){
         if(type === 'engineStart') {
             if(!this.ctx) return;
             const C=this.ctx, t=C.currentTime, OUT=this._o();
-            // Anlauf: kurzer Turbo-Spool
-            const o=this._osc('sawtooth',22),g=this._g(0);
-            o.frequency.linearRampToValueAtTime(48,t+0.6);
-            g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.18,t+0.3);
-            g.gain.exponentialRampToValueAtTime(0.001,t+0.8);
-            o.connect(g); g.connect(OUT); o.start(t); o.stop(t+0.85);
+            // Anlasser-Orgeln (Starter dreht den Block durch)
+            const st=this._osc('sawtooth',52),stf=this._f('lowpass',480),stg=this._g(0);
+            st.frequency.linearRampToValueAtTime(72,t+0.28);
+            stg.gain.setValueAtTime(0,t); stg.gain.linearRampToValueAtTime(0.05,t+0.05);
+            stg.gain.linearRampToValueAtTime(0.001,t+0.32);
+            st.connect(stf); stf.connect(stg); stg.connect(OUT); st.start(t); st.stop(t+0.34);
+            // Erste Zündungen: dumpfe Schläge in beschleunigender Folge
+            [0.16, 0.30, 0.40, 0.47].forEach((d,i)=>{
+                const o=this._osc('sine',75),g=this._g(0);
+                o.frequency.exponentialRampToValueAtTime(32,t+d+0.09);
+                g.gain.setValueAtTime(0,t+d); g.gain.linearRampToValueAtTime(0.22+i*0.03,t+d+0.008);
+                g.gain.exponentialRampToValueAtTime(0.001,t+d+0.1);
+                o.connect(g); g.connect(OUT); o.start(t+d); o.stop(t+d+0.11);
+            });
+            // Auspuff-Husten: Rauschstoß beim Anspringen
+            const co=this._src(this._nb(0.45,true)),cof=this._f('bandpass',260,0.7),cog=this._g(0);
+            cog.gain.setValueAtTime(0,t+0.14); cog.gain.linearRampToValueAtTime(0.5,t+0.2);
+            cog.gain.exponentialRampToValueAtTime(0.001,t+0.6);
+            co.connect(cof); cof.connect(cog); cog.connect(OUT); co.start(t+0.14);
             return;
         }
         return origPlay.call(this, type);

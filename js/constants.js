@@ -1,5 +1,5 @@
 // ─── Constants ───
-const MAP_SIZE = 1800; 
+let MAP_SIZE = 1800; // wird pro Schwierigkeit in createWorld() gesetzt (siehe difficulty.js)
 const SEGMENTS = 150;
 const TANKS_PER_PLAYER = 10; 
 const GRAVITY = 60;
@@ -19,6 +19,7 @@ const AMMO_TYPES = {
 };
 
 // ─── Kontrollpunkte ───
-const NUM_CONTROL_POINTS = 3;
+// Anzahl und Siegschwelle kommen pro Schwierigkeit aus difficulty.js;
+// CP_POINTS_TO_WIN dient nur noch als Fallback.
 const CP_CAPTURE_RADIUS = 55;
 const CP_POINTS_TO_WIN = 12;

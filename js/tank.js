@@ -39,9 +39,11 @@ function createTank(pIdx, id) {
     let placed = false; let x, z, y; let attempts = 0;
     
     while(!placed && attempts < 2000) {
-        x = pIdx === 0 ? -700 + Math.random()*300 : 400 + Math.random()*300;
-        z = (id - 4.5) * 120 + (Math.random()*80);
-        y = getH(x,z); 
+        // Spawn-Zonen skalieren mit der Kartengröße (Spieler West, KI Ost)
+        x = pIdx === 0 ? -MAP_SIZE * 0.39 + Math.random() * MAP_SIZE * 0.17
+                       :  MAP_SIZE * 0.22 + Math.random() * MAP_SIZE * 0.17;
+        z = (id - 4.5) * (MAP_SIZE / 15) + Math.random() * MAP_SIZE * 0.045;
+        y = getH(x,z);
         
         if(y > 4) {
             let overlap = false;
@@ -72,10 +74,12 @@ function createTank(pIdx, id) {
     group.position.set(x, y, z); scene.add(group);
     const hpEl = document.createElement('div'); hpEl.className = 'hp-container'; hpEl.innerHTML = '<div class="hp-fill"></div>'; document.getElementById('fx-layer').appendChild(hpEl);
 
-    const tObj = { 
-        mesh: group, parts: parts, turret: turretGroup, barrelJoint: barrelJoint, 
-        hp: 100, alive: true, hpEl, team: pIdx, 
-        heading: Math.random() * Math.PI * 2, 
+    const maxHP = (pIdx === 1 && isSinglePlayer) ? diffCfg().aiHP : 100;
+    const tObj = {
+        mesh: group, parts: parts, turret: turretGroup, barrelJoint: barrelJoint,
+        hp: maxHP, maxHP, alive: true, hpEl, team: pIdx,
+        revealedUntil: 0,
+        heading: Math.random() * Math.PI * 2,
         settings: { rot: 0, ang: 45, pow: 60 }, speed: 0, turnSpeed: 0
     };
     alignTankToTerrain(tObj, true); return tObj;
@@ -132,20 +136,21 @@ function cpResupply(playerIdx) {
     if(held === 0) return;
 
     const isHuman = (playerIdx === 0);
+    const inv = ammoInventory[playerIdx];
     let msgs = [];
 
     if(held >= 1) {
-        if((ammoInventory['frag'] || 0) < 2) {
-            ammoInventory['frag'] = (ammoInventory['frag'] || 0) + 1;
+        if((inv['frag'] || 0) < 2) {
+            inv['frag'] = (inv['frag'] || 0) + 1;
             msgs.push('+1 Splitter');
-        } else if((ammoInventory['ap'] || 0) < 2) {
-            ammoInventory['ap'] = (ammoInventory['ap'] || 0) + 1;
+        } else if((inv['ap'] || 0) < 2) {
+            inv['ap'] = (inv['ap'] || 0) + 1;
             msgs.push('+1 AP-Granate');
         }
     }
     if(held >= 2) {
-        if((ammoInventory['smoke'] || 0) < 3) {
-            ammoInventory['smoke'] = (ammoInventory['smoke'] || 0) + 1;
+        if((inv['smoke'] || 0) < 3) {
+            inv['smoke'] = (inv['smoke'] || 0) + 1;
             msgs.push('+1 Rauchgranate');
         }
     }
@@ -164,25 +169,24 @@ function cpResupply(playerIdx) {
     }
 }
 
+// Nebel des Krieges — immer aus Sicht des menschlichen Spielers (Team Blau):
+// KI-Panzer sind nur sichtbar, wenn ein eigener Panzer sie in Sichtweite hat
+// oder sie sich kürzlich durch Mündungsfeuer verraten haben (revealedUntil).
+// Die KI selbst braucht keine Mesh-Sichtbarkeit — sie rechnet mit getAIVisionRange().
 function updateFogOfWar() {
-    if(!fogOfWarEnabled || !isSinglePlayer) return;
-    const friendlyTanks = teams[currentPlayer === 0 ? 0 : 1].filter(t => t.alive);
-    const visionRange   = currentPlayer === 0 ? MAP_SIZE * 0.45 : getAIVisionRange();
-
-    teams.forEach((team, teamIdx) => {
-        team.forEach(t => {
-            if(!t.alive || !t.mesh) return;
-            const isEnemy = teamIdx !== currentPlayer;
-            if(!isEnemy) {
-                t.mesh.visible = true;
-                return;
-            }
-            const visible = friendlyTanks.some(f =>
-                f.mesh.position.distanceTo(t.mesh.position) < visionRange
-            );
-            t.mesh.visible = visible;
-            if(t.hpEl) t.hpEl.style.opacity = visible ? '1' : '0';
-        });
+    if(!isSinglePlayer || !teams[1]) return;
+    if(!fogOfWarEnabled) {
+        teams[1].forEach(t => { if(t.alive && t.mesh) t.mesh.visible = true; });
+        return;
+    }
+    const now = performance.now();
+    const visionRange = MAP_SIZE * diffCfg().playerVisionFrac;
+    const spotters = teams[0].filter(t => t.alive);
+    teams[1].forEach(t => {
+        if(!t.alive || !t.mesh) return;
+        const revealed = (t.revealedUntil || 0) > now;
+        t.mesh.visible = revealed || spotters.some(f =>
+            f.mesh.position.distanceTo(t.mesh.position) < visionRange);
     });
 }
 

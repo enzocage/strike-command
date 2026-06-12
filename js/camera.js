@@ -121,12 +121,18 @@ const Cam = {
         if(gs === 'FLY') {
             this._doFly(projectile);
         } else if(activeT) {
-            // Smooth-Anchor folgt Tank (Verbesserung 4: nicht im animate-Loop patchen)
-            const tankTop = activeT.mesh.position.clone(); tankTop.y += 5;
-            this.smoothAnchor.lerp(tankTop, 0.12);
-            this.anchor.copy(this.smoothAnchor);
+            // FOW: Kamera darf einen im Nebel versteckten KI-Panzer nicht
+            // verfolgen — das würde dem Spieler seine Position verraten.
+            const hiddenAI = isSinglePlayer && activeT.team === 1 &&
+                             activeT.mesh && !activeT.mesh.visible;
+            if(!hiddenAI) {
+                // Smooth-Anchor folgt Tank (Verbesserung 4: nicht im animate-Loop patchen)
+                const tankTop = activeT.mesh.position.clone(); tankTop.y += 5;
+                this.smoothAnchor.lerp(tankTop, 0.12);
+                this.anchor.copy(this.smoothAnchor);
+            }
 
-            if(this._autoCamAllowed(gs)) {
+            if(this._autoCamAllowed(gs) && !hiddenAI) {
                 this._autoAngles(gs, activeT);
             }
         }

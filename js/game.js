@@ -47,6 +47,7 @@ function init() {
     window._muzzleLight = muzzleLight;
 
     createWorld();
+    spawnTrees(); spawnBunkers(); // Menü-Hintergrund
     setupFX();
     TacFeed.init();
     LightingDirector.init();
@@ -303,8 +304,9 @@ function spendAP(type) {
 function buildAmmoSelector() {
     const container = document.getElementById('ammo-selector');
     container.innerHTML = '';
+    const inv = ammoInventory[currentPlayer] || {};
     Object.entries(AMMO_TYPES).forEach(([key, ammo]) => {
-        const count = key === 'standard' ? '∞' : (ammoInventory[key] || 0);
+        const count = key === 'standard' ? '∞' : (inv[key] || 0);
         if (count === 0 && key !== 'standard') return;
         const btn = document.createElement('div');
         btn.className = 'ammo-btn' + (key === selectedAmmo ? ' selected' : '');
@@ -320,14 +322,19 @@ function buildAmmoSelector() {
 }
 
 function selectAmmo(key) {
-    if (key !== 'standard' && (ammoInventory[key] || 0) <= 0) return;
+    if (key !== 'standard' && ((ammoInventory[currentPlayer] || {})[key] || 0) <= 0) return;
     selectedAmmo = key;
     buildAmmoSelector();
     Audio.play('select');
 }
 
 function initAmmoInventory() {
-    ammoInventory = { ap: 4, frag: 4, smoke: 3 };
+    const cfg = diffCfg();
+    // Getrennte Vorräte: Index 0 = Spieler/Team Blau, Index 1 = KI/Team Rot
+    ammoInventory = [
+        Object.assign({}, cfg.playerAmmo),
+        Object.assign({}, isSinglePlayer ? cfg.aiAmmo : cfg.playerAmmo)
+    ];
     selectedAmmo = 'standard';
 }
 
@@ -378,32 +385,40 @@ function showStatsScreen(winner) {
 }
 
 function startGame() {
+    const cfg = diffCfg();
     if(Audio.ctx) Audio.setAmbient(1.0);
     document.getElementById('main-menu').style.display = 'none';
     document.getElementById('hud').style.display = 'block';
-    if(isSinglePlayer) {
-        document.getElementById('fog-indicator').style.display = 'block';
-    }
     teams.flat().forEach(t => { scene.remove(t.mesh); if(t.hpEl) t.hpEl.remove(); });
     physicalDebris.forEach(d => scene.remove(d.mesh)); physicalDebris = [];
     blastAreas.forEach(b => scene.remove(b.mesh)); blastAreas = [];
     shields.forEach(s => scene.remove(s.mesh)); shields = [];
-    shieldsRemaining = [2, 2];
-    
-    trees.forEach(t => scene.remove(t.mesh)); trees = []; 
+    shieldsRemaining = [2, isSinglePlayer ? cfg.aiShields : 2];
+
+    trees.forEach(t => scene.remove(t.mesh)); trees = [];
     bunkers.forEach(b => scene.remove(b.mesh)); bunkers = [];
     smokeScreens.forEach(s => { scene.remove(s.mesh); clearTimeout(s.timer); }); smokeScreens = [];
-    
+
     gameStats = [
         { shotsFired: 0, shotsHit: 0, totalDamage: 0, tanksDestroyed: 0, cpTurns: 0, ammoUsed: {} },
         { shotsFired: 0, shotsHit: 0, totalDamage: 0, tanksDestroyed: 0, cpTurns: 0, ammoUsed: {} }
     ];
     cpScores = [0, 0];
     aiRoles = {}; aiLastActive = -1; aiTurnQueue = []; aiCurrentQueueIdx = 0;
-    fogOfWarEnabled = true;
-    document.getElementById('fog-indicator').style.display = 'none';
 
-    spawnTrees(); spawnBunkers(); spawnControlPoints();
+    // Nebel des Krieges & Anzeige pro Schwierigkeit
+    fogOfWarEnabled = isSinglePlayer && cfg.fowEnabled;
+    const fogInd = document.getElementById('fog-indicator');
+    if(isSinglePlayer) {
+        fogInd.style.display = 'block';
+        fogInd.textContent = (cfg.fowEnabled ? '🌫️ NEBEL DES KRIEGES' : '☀️ VOLLE SICHT') + ' · KI: ' + cfg.name;
+    } else {
+        fogInd.style.display = 'none';
+    }
+
+    // Welt pro Schwierigkeit neu generieren (Größe, Terrain, Dichte, CPs)
+    createWorld(cfg);
+    spawnTrees(cfg.treeCount); spawnBunkers(cfg.bunkerCount); spawnControlPoints();
     initAmmoInventory();
     buildNavigationGrid(currentPlayer);
 
@@ -473,7 +488,10 @@ function endTurnSequence() {
     }
 
     setTimeout(() => {
-        currentPlayer = 1 - currentPlayer; fuel = 100; document.getElementById('fuel-fill').style.width = '100%';
+        currentPlayer = 1 - currentPlayer;
+        // Die KI bekommt auf großen Karten mehr Treibstoff (Mobilitätsausgleich)
+        fuel = (isSinglePlayer && currentPlayer === 1) ? diffCfg().fuelTurn : 100;
+        document.getElementById('fuel-fill').style.width = Math.min(100, fuel) + '%';
         announceTurn();
     }, 6000);
 }
@@ -613,11 +631,14 @@ function fire() {
 
     gameStats[currentPlayer].shotsFired++;
     if (selectedAmmo !== 'standard') {
-        ammoInventory[selectedAmmo] = Math.max(0, (ammoInventory[selectedAmmo] || 0) - 1);
+        const inv = ammoInventory[currentPlayer];
+        inv[selectedAmmo] = Math.max(0, (inv[selectedAmmo] || 0) - 1);
     }
 
     const ammo = AMMO_TYPES[selectedAmmo];
     const t = teams[currentPlayer][activeTankIdx[currentPlayer]];
+    // Mündungsfeuer verrät die Position: KI-Panzer wird im FOW kurz enttarnt
+    if (isSinglePlayer && currentPlayer === 1) t.revealedUntil = performance.now() + 7000;
     if(t && t.barrelJoint) {
         const tipPos = new THREE.Vector3(0,0,9).applyMatrix4(t.barrelJoint.matrixWorld);
         const barrelDir = new THREE.Vector3(0,0,1).applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(t.barrelJoint.matrixWorld)).normalize();
@@ -641,7 +662,7 @@ function fire() {
 
     projectile.position.copy(tip);
     projectileVel = dir.multiplyScalar(t.settings.pow * 1.5 * ammo.speedMult);
-    projectile.userData = { shooterPos: t.mesh.position.clone(), ammoType: selectedAmmo };
+    projectile.userData = { shooterPos: t.mesh.position.clone(), ammoType: selectedAmmo, shooter: t };
     projectile.visible = true; projectileLight.visible = true;
 
     {
@@ -823,7 +844,7 @@ function handleExplosion(pos, shooterPos) {
                     spawnDamageText(t.mesh.position, damage, isDestroyed || damage >= 100);
                     TacFeed.hit(damage, t.team === 0, isDestroyed);
                     
-                    const fill = t.hpEl.querySelector('.hp-fill'); fill.style.width = Math.max(0, t.hp) + '%';
+                    const fill = t.hpEl.querySelector('.hp-fill'); fill.style.width = Math.max(0, Math.min(100, t.hp / (t.maxHP || 100) * 100)) + '%';
                     if(t.hp < 30) fill.style.background = '#ff0055'; else if(t.hp < 60) fill.style.background = '#ffaa00';
                     
                     if(isDestroyed) {
@@ -961,12 +982,12 @@ function animate() {
                 if(aiDriveParams.retryShot) {
                     aiDriveParams.retryShot = false;
                     spendAP('move');
-                    setTimeout(doAITurn, aiDifficulty === 3 ? 180 : 320);
+                    setTimeout(doAITurn, diffCfg().thinkDelay);
                 } else if(apUsedFire) {
                     setTimeout(aiNextTankOrEnd, 300);
                 } else {
                     spendAP('move');
-                    setTimeout(doAITurn, aiDifficulty === 3 ? 180 : 320);
+                    setTimeout(doAITurn, diffCfg().thinkDelay);
                 }
             } else {
                 let p = aiDriveParams.path;
@@ -1024,11 +1045,12 @@ function animate() {
         let inputActive = false;
         if (fuel > 0 && (finalF !== 0 || finalR !== 0)) {
             inputActive = true; if(!Audio.engineRunning) { Audio.setEngineRunning(true); Audio.engineRunning = true; }
-            if(activeT && activeT.alive) fxEngineSmoke(activeT.mesh.position, 1.0);
+            // Kein Abgasrauch für im Nebel versteckte KI-Panzer (würde Position verraten)
+            if(activeT && activeT.alive && activeT.mesh.visible) fxEngineSmoke(activeT.mesh.position, 1.0);
             const pRole = playerRoles[activeTankIdx[currentPlayer]] || 'attacker';
             const speedMod = pRole === 'flanker' ? 1.25 : pRole === 'holder' ? 0.85 : 1.0;
             activeT.speed += finalF * 45 * speedMod * dt; activeT.turnSpeed += (finalR * 2.2 - activeT.turnSpeed) * 8 * dt;
-            fuel -= 3.75 * dt; document.getElementById('fuel-fill').style.width = Math.max(0, fuel) + '%';
+            fuel -= 3.75 * dt; document.getElementById('fuel-fill').style.width = Math.min(100, Math.max(0, fuel)) + '%';
         } else {
             if (fuel <= 0 && (finalF !== 0 || finalR !== 0) && Audio.engineRunning) {
                 Audio.play('error'); Audio.setEngineRunning(false); Audio.engineRunning = false;
@@ -1122,6 +1144,79 @@ function animate() {
         } else {
             trajectoryPoints.visible = false; impactMarker.visible = false;
         }
+    }
+
+    // ─── Projektil-Flugphysik ───
+    if(gameState === 'FLY' && projectile && projectile.visible && projectileVel) {
+        const shooterTank = projectile.userData.shooter;
+        const sub = 3; // Substeps gegen Tunneling bei hoher Geschwindigkeit
+        const sdt = dt / sub;
+        let exploded = false;
+
+        for(let s2 = 0; s2 < sub && !exploded; s2++) {
+            projectileVel.y -= GRAVITY * sdt;
+            projectile.position.addScaledVector(projectileVel, sdt);
+            const pp = projectile.position;
+
+            // Gegnerische Schilde stoppen das Projektil an der Oberfläche
+            for(let s of shields) {
+                if(s.team !== currentPlayer && pp.distanceTo(s.pos) <= s.currentRadius) {
+                    fxShieldRipple(pp.clone(), s.pos, s.currentRadius);
+                    exploded = true; break;
+                }
+            }
+            if(exploded) break;
+
+            // Direkter Panzertreffer (Schütze selbst ausgenommen)
+            for(const t of teams.flat()) {
+                if(!t.alive || t === shooterTank) continue;
+                const center = t.mesh.position.clone(); center.y += 3;
+                if(pp.distanceTo(center) < 8) { exploded = true; break; }
+            }
+            if(exploded) break;
+
+            // Bunker
+            for(const b of bunkers) {
+                if(b.alive && pp.y < b.mesh.position.y + 21 &&
+                   Math.hypot(pp.x - b.mesh.position.x, pp.z - b.mesh.position.z) < 20) {
+                    exploded = true; break;
+                }
+            }
+            if(exploded) break;
+
+            // Terrain / Wasseroberfläche
+            if(pp.y <= getH(pp.x, pp.z)) { exploded = true; break; }
+
+            // Sicherheitsnetz: weit außerhalb der Karte
+            if(Math.abs(pp.x) > MAP_SIZE * 1.2 || Math.abs(pp.z) > MAP_SIZE * 1.2 || pp.y < -40) {
+                exploded = true; break;
+            }
+        }
+
+        projectileLight.position.copy(projectile.position);
+
+        if(!exploded && Math.random() < 0.6) {
+            const puff = new THREE.Mesh(
+                new THREE.SphereGeometry(1.2, 4, 4),
+                new THREE.MeshBasicMaterial({ color: 0xbbbbbb, transparent: true, opacity: 0.6 })
+            );
+            puff.position.copy(projectile.position);
+            puff.userData = { life: 0.8 };
+            scene.add(puff); smokeTrail.push(puff);
+        }
+
+        if(exploded) {
+            const impactPos = projectile.position.clone();
+            projectile.visible = false;
+            handleExplosion(impactPos, projectile.userData.shooterPos);
+        }
+    }
+
+    // ─── Nebel des Krieges (gedrosselt, ~4×/s) ───
+    window._fowTimer = (window._fowTimer || 0) + dt;
+    if(window._fowTimer > 0.25 && gameState !== 'MENU') {
+        window._fowTimer = 0;
+        updateFogOfWar();
     }
 
     if(gameState !== 'MENU') {
@@ -1276,4 +1371,3 @@ function animate() {
 }
 
 window.onload = init;
-updateFogOfWar();

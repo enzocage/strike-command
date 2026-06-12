@@ -71,7 +71,7 @@ function findPath(start, target) {
     let closed = Array.from({length: cells}, () => Array(cells).fill(false));
     
     let iterations = 0;
-    while(open.length > 0 && iterations < 2500) { 
+    while(open.length > 0 && iterations < 6000) { // großzügig für 80×80-Grids (Albtraum-Karte)
         iterations++;
         
         let minIdx = 0;
@@ -121,6 +121,9 @@ function findPath(start, target) {
     return []; 
 }
 
+// Rubber-Banding: positives Delta = Spieler liegt vorn.
+// cfg.rubberband steuert die Richtung: -1 hilft dem Spieler (KI wird
+// nachlässig, wenn sie führt), 0 neutral, 1-2 hilft der KI zunehmend.
 const AdaptiveAI = {
     getDelta() {
         const p1Alive = teams[0].filter(t => t.alive).length;
@@ -132,28 +135,26 @@ const AdaptiveAI = {
     },
     bonusActions() {
         if(!isSinglePlayer) return 0;
+        const rb = diffCfg().rubberband;
+        if(rb <= -1) return 0;
         const delta = this.getDelta();
-        if(delta >= 35) return 2;
-        if(delta >= 18) return 1;
-        return 0;
+        if(rb === 0) return delta >= 30 ? 1 : 0;
+        if(rb === 1) return delta >= 35 ? 2 : (delta >= 18 ? 1 : 0);
+        return delta >= 28 ? 2 : (delta >= 12 ? 1 : 0);
     },
     accuracyMod() {
         if(!isSinglePlayer) return 0;
+        const rb = diffCfg().rubberband;
         const delta = this.getDelta();
-        if(delta >= 25) return  0.35;
-        if(delta <= -20) return -0.25;
-        return 0;
-    },
-    hasBonusShot() {
-        if(!isSinglePlayer || aiDifficulty === 3) return false;
-        return this.getDelta() >= 30;
+        if(rb <= -1) return delta <= -20 ? -0.45 : 0;
+        if(rb === 0)  return delta >= 25 ? 0.20 : (delta <= -20 ? -0.25 : 0);
+        if(rb === 1)  return delta >= 25 ? 0.35 : (delta <= -20 ? -0.25 : 0);
+        return delta >= 20 ? 0.45 : (delta <= -25 ? -0.15 : 0);
     }
 };
 
 function getAIVisionRange() {
-    if(aiDifficulty === 3) return MAP_SIZE * 0.62;
-    if(aiDifficulty === 2) return MAP_SIZE * 0.40;
-    return MAP_SIZE * 0.22;
+    return MAP_SIZE * diffCfg().aiVisionFrac;
 }
 
 function updateRoleIcons() {
@@ -211,9 +212,7 @@ function buildAITurnQueue() {
     if(isSinglePlayer && adaptDelta >= 18) TacFeed.adapt('KI erhält Verstärkung');
     else if(isSinglePlayer && adaptDelta <= -20) TacFeed.adapt('KI nimmt sich zurück');
 
-    const baseSlots = aiDifficulty === 3 ? Math.min(3, alive.length)
-                    : aiDifficulty === 2 ? Math.min(2, alive.length)
-                    : 1;
+    const baseSlots = Math.min(diffCfg().tanksPerTurn, alive.length);
     const bonus = isSinglePlayer ? AdaptiveAI.bonusActions() : 0;
     const slots = Math.min(alive.length, baseSlots + bonus);
 
@@ -252,7 +251,9 @@ function buildAITurnQueue() {
     return scored.slice(0, slots).map(s => s.idx);
 }
 
-function simulateShot(tipPos, aimDir, power, speedMult) {
+// obstacleAware: bricht zusätzlich an Bunkern und gegnerischen Schilden ab —
+// damit erkennt die KI blockierte Flugbahnen und verschwendet keine Schüsse.
+function simulateShot(tipPos, aimDir, power, speedMult, obstacleAware) {
     let px = tipPos.x, py = tipPos.y, pz = tipPos.z;
     const spd = power * 1.5 * (speedMult || 1.0);
     let vx = aimDir.x * spd, vy = aimDir.y * spd, vz = aimDir.z * spd;
@@ -261,6 +262,18 @@ function simulateShot(tipPos, aimDir, power, speedMult) {
         vy -= GRAVITY * dt;
         px += vx * dt; py += vy * dt; pz += vz * dt;
         if(py <= getH(px, pz)) return new THREE.Vector3(px, py, pz);
+        if(obstacleAware) {
+            for(let b of bunkers) {
+                if(b.alive && py < b.mesh.position.y + 21 &&
+                   Math.hypot(px - b.mesh.position.x, pz - b.mesh.position.z) < 20)
+                    return new THREE.Vector3(px, py, pz);
+            }
+            for(let s of shields) {
+                if(s.team === 0 &&
+                   Math.hypot(px - s.pos.x, py - s.pos.y, pz - s.pos.z) <= s.currentRadius)
+                    return new THREE.Vector3(px, py, pz);
+            }
+        }
         if(Math.abs(px) > MAP_SIZE || Math.abs(pz) > MAP_SIZE) return null;
     }
     return null;
@@ -268,6 +281,8 @@ function simulateShot(tipPos, aimDir, power, speedMult) {
 
 function findBestShot(shooter, targetPos, ammoSpeedMult) {
     ammoSpeedMult = ammoSpeedMult || 1.0;
+    const cfg = diffCfg();
+    const obstacleAware = cfg.obstacleAwareShots;
     const origRot = shooter.settings.rot, origAng = shooter.settings.ang, origPow = shooter.settings.pow;
 
     const dx = targetPos.x - shooter.mesh.position.x;
@@ -288,15 +303,15 @@ function findBestShot(shooter, targetPos, ammoSpeedMult) {
             const tip = new THREE.Vector3(0,0,9).applyMatrix4(shooter.barrelJoint.matrixWorld);
             const dir = new THREE.Vector3(0,0,1).applyQuaternion(
                 new THREE.Quaternion().setFromRotationMatrix(shooter.barrelJoint.matrixWorld)).normalize();
-            const impact = simulateShot(tip, dir, testPow, ammoSpeedMult);
+            const impact = simulateShot(tip, dir, testPow, ammoSpeedMult, obstacleAware);
             if(!impact) continue;
             const d = impact.distanceTo(targetPos);
             if(d < best.landDist) best = { rot: exactRot, ang: testAng, pow: testPow, landDist: d, impactPos: impact.clone() };
         }
     }
 
-    if(aiDifficulty >= 2 && best.landDist < 400) {
-        const fAS = aiDifficulty === 3 ? 1 : 2, fPS = aiDifficulty === 3 ? 3 : 5;
+    if(cfg.fineSearch > 0 && best.landDist < 400) {
+        const fAS = cfg.fineSearch >= 2 ? 1 : 2, fPS = cfg.fineSearch >= 2 ? 3 : 5;
         for(let ta = Math.max(5, best.ang-8); ta <= Math.min(85, best.ang+8); ta += fAS) {
             for(let tp = Math.max(20, best.pow-15); tp <= Math.min(150, best.pow+15); tp += fPS) {
                 shooter.settings.rot = exactRot; shooter.settings.ang = ta; shooter.settings.pow = tp;
@@ -306,7 +321,7 @@ function findBestShot(shooter, targetPos, ammoSpeedMult) {
                 const tip = new THREE.Vector3(0,0,9).applyMatrix4(shooter.barrelJoint.matrixWorld);
                 const dir = new THREE.Vector3(0,0,1).applyQuaternion(
                     new THREE.Quaternion().setFromRotationMatrix(shooter.barrelJoint.matrixWorld)).normalize();
-                const impact = simulateShot(tip, dir, tp, ammoSpeedMult);
+                const impact = simulateShot(tip, dir, tp, ammoSpeedMult, obstacleAware);
                 if(!impact) continue;
                 const d = impact.distanceTo(targetPos);
                 if(d < best.landDist) best = { rot: exactRot, ang: ta, pow: tp, landDist: d, impactPos: impact.clone() };
@@ -323,22 +338,22 @@ function findBestShot(shooter, targetPos, ammoSpeedMult) {
 
 function aiShotThreshold() {
     const ammoBonus = selectedAmmo === 'frag' ? 60 : 0;
-    if(aiDifficulty === 3) return 55  + ammoBonus;
-    if(aiDifficulty === 2) return 100 + ammoBonus;
-    return 180 + ammoBonus;
+    return diffCfg().shotThreshold + ammoBonus;
 }
 
 function aiScoreTarget(aiTank, enemyTank) {
+    const cfg = diffCfg();
     const dist = aiTank.mesh.position.distanceTo(enemyTank.mesh.position);
     if(dist > getAIVisionRange()) return -1;
     for(let sm of smokeScreens) if(enemyTank.mesh.position.distanceTo(sm.pos) < sm.radius) return -1;
     const hasLOS = hasLineOfSightDeterministic(aiTank.mesh.position, enemyTank.mesh.position);
-    if(!hasLOS && aiDifficulty === 1) return -1;
+    if(!hasLOS && cfg.needsLOS) return -1;
     const losMalus = hasLOS ? 0 : -25;
     const myH = getH(aiTank.mesh.position.x, aiTank.mesh.position.z);
     const enemyH = getH(enemyTank.mesh.position.x, enemyTank.mesh.position.z);
     const heightBonus = (myH - enemyH) * 1.2;
     let score = (100 - enemyTank.hp) * 1.3 + (1 - dist / getAIVisionRange()) * 55 + losMalus + heightBonus;
+    if(enemyTank.hp <= 40) score += 35; // Abschuss sichern statt Schaden verteilen
     for(let cp of controlPoints) {
         const onCP = enemyTank.mesh.position.distanceTo(cp.pos) < CP_CAPTURE_RADIUS;
         if(onCP && cp.holder === 0)  score += 45;
@@ -348,9 +363,11 @@ function aiScoreTarget(aiTank, enemyTank) {
 }
 
 function aiPickAmmo(aiTank, targetTank) {
-    if(aiDifficulty === 1) return 'standard';
+    const iq = diffCfg().ammoIQ;
+    if(iq <= 0) return 'standard';
+    const inv = ammoInventory[1] || {};
     const dist = aiTank.mesh.position.distanceTo(targetTank.mesh.position);
-    if((ammoInventory['smoke'] || 0) > 0) {
+    if((inv['smoke'] || 0) > 0) {
         for(let cp of controlPoints) {
             if(cp.holder === 0) {
                 const count = teams[0].filter(t => t.alive && t.mesh.position.distanceTo(cp.pos) < CP_CAPTURE_RADIUS).length;
@@ -358,34 +375,81 @@ function aiPickAmmo(aiTank, targetTank) {
             }
         }
     }
-    if((ammoInventory['ap'] || 0) > 0 && (targetTank.hp < 40 || dist < 180)) return 'ap';
-    if((ammoInventory['frag'] || 0) > 0) {
+    if((inv['ap'] || 0) > 0) {
+        if(iq >= 2 && (targetTank.hp <= 55 || dist < 220)) return 'ap';
+        if(targetTank.hp < 40 || dist < 180) return 'ap';
+    }
+    if((inv['frag'] || 0) > 0) {
         const cluster = teams[0].filter(t => t.alive && t.mesh.position.distanceTo(targetTank.mesh.position) < 110).length;
         if(cluster >= 2) return 'frag';
+        // Aggressiv: Splitter gegen Ziele auf Kontrollpunkten — großer Radius
+        // gleicht den Capture-Ring ab
+        if(iq >= 3 && controlPoints.some(cp => targetTank.mesh.position.distanceTo(cp.pos) < CP_CAPTURE_RADIUS)) return 'frag';
     }
     return 'standard';
 }
 
 function aiShouldShield(aiTank) {
-    if(shieldsRemaining[1] <= 0) return false;
+    const iq = diffCfg().shieldIQ;
+    if(iq <= 0 || shieldsRemaining[1] <= 0) return false;
     if(shields.some(s => s.team === 1 && aiTank.mesh.position.distanceTo(s.pos) <= s.currentRadius)) return false;
-    if(aiTank.hp < 32 && aiDifficulty >= 2) return true;
-    if(aiTank.hp < 55 && aiDifficulty === 3 && Math.random() < 0.45) return true;
-    if(aiDifficulty === 3) {
+    if(aiTank.hp < 32) return true;
+    if(iq >= 2) {
+        if(aiTank.hp < 55 && Math.random() < 0.45) return true;
+        // Wertvolle Position halten: auf eigenem/umkämpftem CP unter Druck
+        const onCP = controlPoints.some(cp => (cp.holder === 1 || cp.capturingTeam === 1) &&
+            aiTank.mesh.position.distanceTo(cp.pos) < CP_CAPTURE_RADIUS);
+        const enemiesNear = teams[0].filter(t => t.alive &&
+            t.mesh.position.distanceTo(aiTank.mesh.position) < 500).length;
+        if(onCP && enemiesNear >= 2 && aiTank.hp < 75) return true;
+    }
+    if(iq >= 3) {
         const allies = teams[1].filter(t => t.alive && t !== aiTank && t.mesh.position.distanceTo(aiTank.mesh.position) < 110);
-        if(allies.length >= 2 && shieldsRemaining[1] >= 1) return true;
+        if(allies.length >= 2 && shieldsRemaining[1] >= 2) return true;
     }
     return false;
 }
 
 function aiPickMoveTarget(aiTank) {
-    const diff = aiDifficulty;
+    const cfg = diffCfg();
     const visRange = getAIVisionRange();
     const playerTanks = teams[0].filter(t => t.alive);
     const role = aiRoles[teams[1].indexOf(aiTank)] || 'attacker';
     let candidates = [];
 
-    if(aiTank.hp < 28 || (aiTank.hp < 50 && diff === 3)) {
+    // CP-Endgame: steht der Spieler kurz vor dem Punktesieg, hat das Stürmen
+    // seiner Kontrollpunkte Vorrang — Präsenz im Ring stoppt die Punktevergabe.
+    if(cfg.cpEndgame) {
+        const winThresh = window._cpWinThreshold || cfg.cpWinPoints;
+        if(cpScores[0] >= winThresh - 3) {
+            controlPoints.forEach(cp => {
+                if(cp.holder === 0 || cp.capturingTeam === 0) {
+                    const d = aiTank.mesh.position.distanceTo(cp.pos);
+                    candidates.push({ pos: cp.pos.clone(), score: 170 - d * 0.02 });
+                }
+            });
+        }
+    }
+
+    // Deckungssuche: Position hinter einem Bunker, vom nächsten Feind abgewandt
+    if(cfg.coverSeeking && playerTanks.length > 0) {
+        let nearestEnemy = playerTanks[0], minED = 9e9;
+        playerTanks.forEach(e => {
+            const d = e.mesh.position.distanceTo(aiTank.mesh.position);
+            if(d < minED) { minED = d; nearestEnemy = e; }
+        });
+        bunkers.forEach(b => {
+            if(!b.alive) return;
+            if(aiTank.mesh.position.distanceTo(b.mesh.position) > 500) return;
+            const dir = b.mesh.position.clone().sub(nearestEnemy.mesh.position).setY(0).normalize();
+            const coverPos = b.mesh.position.clone().add(dir.multiplyScalar(45));
+            const h = getH(coverPos.x, coverPos.z);
+            if(h < 2) return;
+            candidates.push({ pos: coverPos, score: 58 + Math.max(0, h) * 0.8 + (aiTank.hp < 60 ? 25 : 0) });
+        });
+    }
+
+    if(aiTank.hp < 28 || (aiTank.hp < 50 && cfg.coverSeeking)) {
         let nearest = null, minD = 9e9;
         playerTanks.forEach(e => { const d = e.mesh.position.distanceTo(aiTank.mesh.position); if(d < minD) { minD = d; nearest = e; }});
         if(nearest) {
@@ -410,7 +474,7 @@ function aiPickMoveTarget(aiTank) {
         }
     }
 
-    if(role === 'holder' || diff <= 1) {
+    if(role === 'holder' || cfg.tanksPerTurn === 1) {
         const cpUrgency = cpScores[0] >= 7 ? 2.2 : (cpScores[0] >= 4 ? 1.6 : 1.0);
         controlPoints.forEach(cp => {
             const dist = aiTank.mesh.position.distanceTo(cp.pos);
@@ -473,8 +537,8 @@ function aiPickMoveTarget(aiTank) {
             }
         });
         if(candidates.length === 0 && role === 'attacker') {
-            const px = -200 - Math.random() * 500;
-            const pz = (Math.random()-0.5) * 1000;
+            const px = -MAP_SIZE * (0.11 + Math.random() * 0.28);
+            const pz = (Math.random()-0.5) * MAP_SIZE * 0.55;
             candidates.push({ pos: new THREE.Vector3(px, 0, pz), score: 20 });
         }
     }
@@ -576,7 +640,7 @@ function doAITurn() {
     const shot = findBestShot(aiTank, bestTarget.mesh.position, ammoData.speedMult);
     const threshold = aiShotThreshold();
 
-    const allyInBlast = isSinglePlayer && aiDifficulty <= 2 && teams[1].some(ally => {
+    const allyInBlast = isSinglePlayer && teams[1].some(ally => {
         if(!ally.alive || ally === aiTank) return false;
         const toAlly = ally.mesh.position.clone().sub(aiTank.mesh.position);
         const toTarget = bestTarget.mesh.position.clone().sub(aiTank.mesh.position);
@@ -616,18 +680,20 @@ function doAITurn() {
 
     aiDriveParams.retryShot = false;
 
-    const baseNm = aiDifficulty === 1 ? 1.1 : (aiDifficulty === 2 ? 0.22 : 0.03);
+    const cfg = diffCfg();
     const accMod = isSinglePlayer ? AdaptiveAI.accuracyMod() : 0;
-    const nm = Math.max(0.01, baseNm * (1.0 - accMod));
+    let nm = Math.max(0.01, cfg.aimNoise * (1.0 - accMod));
+    // Realistische Streuung: nahe Ziele präzise, ferne Ziele unsicherer
+    const targetDist = aiTank.mesh.position.distanceTo(bestTarget.mesh.position);
+    nm *= 0.65 + 0.7 * Math.min(1, targetDist / 900);
     shot.rot = Math.max(-180, Math.min(180, shot.rot + (Math.random()-0.5)*22*nm));
     shot.ang = Math.max(0,    Math.min(85,  shot.ang + (Math.random()-0.5)*16*nm));
     shot.pow = Math.max(10,   Math.min(150, shot.pow + (Math.random()-0.5)*25*nm));
 
-    aiPostShotMove = !apUsedMove;
+    aiPostShotMove = cfg.shootAndScoot && !apUsedMove;
 
-    const aimDur = aiDifficulty === 3 ? 850 : (aiDifficulty === 2 ? 1200 : 1750);
-    animateAIAiming(aiTank, shot, aimDur, () => {
-        setTimeout(fire, aiDifficulty === 3 ? 220 : 450);
+    animateAIAiming(aiTank, shot, cfg.aimDuration, () => {
+        setTimeout(fire, cfg.fireDelay);
     });
 }
 
@@ -648,8 +714,10 @@ function doAIPostShotMove() {
     gameState = 'AI_DRIVE';
 }
 
-function aiHideReposition() {
+function aiHideReposition(count) {
     if(gameState !== 'HIDE') return;
+    if(count === undefined) count = diffCfg().hideRepositionCount;
+    if(count <= 0) return;
     const aiTanks = teams[1].filter(t => t.alive);
     if(aiTanks.length === 0) return;
 
@@ -675,7 +743,8 @@ function aiHideReposition() {
     gameState = 'AI_DRIVE';
     setTimeout(() => {
         if(gameState === 'AI_DRIVE') gameState = 'HIDE';
-    }, 3500);
+        if(count > 1) setTimeout(() => aiHideReposition(count - 1), 150);
+    }, 2400);
 }
 
 function startAIDrive() {
@@ -722,18 +791,18 @@ function pickNewAITarget(tank) {
     while(aiDriveParams.path.length === 0 && retries > 0) {
         let tx, tz;
         if(role === 'holder' || role === 'support') {
-            tx = 200 + Math.random() * 500;
-            tz = (Math.random()-0.5) * 900;
+            tx = MAP_SIZE * (0.11 + Math.random() * 0.28);
+            tz = (Math.random()-0.5) * MAP_SIZE * 0.5;
         } else {
-            tx = -200 - Math.random() * 500;
-            tz = (Math.random()-0.5) * 900;
+            tx = -MAP_SIZE * (0.11 + Math.random() * 0.28);
+            tz = (Math.random()-0.5) * MAP_SIZE * 0.5;
         }
         aiDriveParams.target = new THREE.Vector3(tx, 0, tz);
         aiDriveParams.path = findPath(tank.mesh.position, aiDriveParams.target);
         retries--;
     }
     if(aiDriveParams.path.length === 0) {
-        aiDriveParams.target = new THREE.Vector3(role === 'holder' ? 400 : -400, 0, 0);
+        aiDriveParams.target = new THREE.Vector3(role === 'holder' ? MAP_SIZE * 0.22 : -MAP_SIZE * 0.22, 0, 0);
         aiDriveParams.path = [tank.mesh.position.clone(), aiDriveParams.target];
     }
     aiDriveParams.pathIndex = 1;
