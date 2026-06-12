@@ -1,40 +1,233 @@
 // ═══════════════════════════════════════════════════════════════
-// STRIKE COMMANDER — Tactical Minimap
-// 2D Top-Down View: Panzer, Bunker, Bäume, Kontrollpunkte, Granatenfeuerlinie
+// STRIKE COMMANDER — 3D Tactical Minimap (CIA-Style)
+// Höhenlinien, Seegrenzen, Terrain-Färbung, 3D-Einheiten
 // ═══════════════════════════════════════════════════════════════
 
 const Minimap = {
     canvas: null,
-    ctx: null,
+    renderer: null,
+    scene: null,
+    camera: null,
+    terrainMesh: null,
+    contourLines: null,
+    waterBorder: null,
+    unitMarkers: [],
     enabled: true,
-    scale: 1,    // pixels per world unit
-    offsetX: 0,  // canvas center in world coords
-    offsetY: 0,
+    size: 320,
 
     init() {
-        // Canvas erstellen oder finden
+        // Canvas & WebGL-Renderer
         let canvas = document.getElementById('minimap-canvas');
         if (!canvas) {
             canvas = document.createElement('canvas');
             canvas.id = 'minimap-canvas';
-            canvas.width = 280;
-            canvas.height = 280;
+            canvas.width = this.size;
+            canvas.height = this.size;
             document.getElementById('ui-layer').appendChild(canvas);
         }
         this.canvas = canvas;
-        this.ctx = canvas.getContext('2d');
-        this.updateSize();
+
+        try {
+            this.renderer = new THREE.WebGLRenderer({
+                canvas: canvas,
+                antialias: true,
+                alpha: true,
+                powerPreference: 'low-power'
+            });
+            this.renderer.setSize(this.size, this.size);
+            this.renderer.setPixelRatio(1);
+            this.renderer.setClearColor(0x0a1520, 0.95);
+            this.renderer.shadowMap.enabled = false;
+        } catch (e) {
+            console.warn('Minimap WebGL init failed:', e);
+            return;
+        }
+
+        // Scene & orthografische Kamera (Draufsicht)
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.OrthographicCamera(
+            -MAP_SIZE / 2, MAP_SIZE / 2,
+            MAP_SIZE / 2, -MAP_SIZE / 2,
+            0.1, 10000
+        );
+        this.camera.position.set(0, 500, 0);
+        this.camera.lookAt(0, 0, 0);
+
+        // Beleuchtung (flach für Minimap)
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        light.position.set(500, 800, 500);
+        this.scene.add(light);
+        const ambient = new THREE.AmbientLight(0xaabbcc, 0.8);
+        this.scene.add(ambient);
+
+        this.createTerrainMesh();
+        this.createContourLines();
+        this.createWaterBorder();
         this.setupToggle();
         this.setupTooltip();
     },
 
+    createTerrainMesh() {
+        if (!terrain || !heightData) return;
+
+        // Vereinfachtes Terrain-Mesh (jeder 2. Vertex, um Performance zu sparen)
+        const seg = SEGMENTS / 2;
+        const geo = new THREE.BufferGeometry();
+        const positions = [];
+        const colors = [];
+
+        for (let iz = 0; iz <= seg; iz++) {
+            for (let ix = 0; ix <= seg; ix++) {
+                const x = (ix / seg - 0.5) * MAP_SIZE;
+                const z = (iz / seg - 0.5) * MAP_SIZE;
+                const h = getH(x, z);
+
+                positions.push(x, h, z);
+
+                // CIA-Kartenstil: Farbe nach Höhe
+                // Wasser: Dunkelblau, Sand: Hell, Gras: Grün, Berge: Grau/Beige
+                let col;
+                if (h < 3) {
+                    col = new THREE.Color(0x1a4a7a); // Wasser-Blau
+                } else if (h < 5) {
+                    col = new THREE.Color(0x8a7a5a); // Sand
+                } else if (h < 15) {
+                    col = new THREE.Color(0x3a6a2a); // Gras
+                } else if (h < 22) {
+                    col = new THREE.Color(0x6a7a5a); // Grüne Hügel
+                } else if (h < 28) {
+                    col = new THREE.Color(0x8a8a7a); // Graue Berge
+                } else {
+                    col = new THREE.Color(0xd0d0c0); // Schnee
+                }
+
+                colors.push(col.r, col.g, col.b);
+            }
+        }
+
+        // Indizes für Triangles
+        const indices = [];
+        for (let iz = 0; iz < seg; iz++) {
+            for (let ix = 0; ix < seg; ix++) {
+                const a = iz * (seg + 1) + ix;
+                const b = iz * (seg + 1) + ix + 1;
+                const c = (iz + 1) * (seg + 1) + ix;
+                const d = (iz + 1) * (seg + 1) + ix + 1;
+
+                indices.push(a, c, b);
+                indices.push(b, c, d);
+            }
+        }
+
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+        geo.computeVertexNormals();
+
+        const mat = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.9,
+            metalness: 0.0,
+            flatShading: false
+        });
+
+        this.terrainMesh = new THREE.Mesh(geo, mat);
+        this.scene.add(this.terrainMesh);
+    },
+
+    createContourLines() {
+        // Höhenlinien: Linen alle 5 Höhen-Einheiten
+        const contourGroup = new THREE.Group();
+        const lineMat = new THREE.LineBasicMaterial({
+            color: 0x8899aa,
+            transparent: true,
+            opacity: 0.5,
+            linewidth: 1
+        });
+
+        const contourInterval = 5;
+        const maxH = 35;
+
+        for (let h = contourInterval; h < maxH; h += contourInterval) {
+            const points = [];
+
+            // Marching-Squares-ähnlich: Finde Punkte auf dieser Höhe
+            const step = MAP_SIZE / 40; // Grobe Auflösung für Performance
+            for (let x = -MAP_SIZE / 2; x < MAP_SIZE / 2; x += step) {
+                for (let z = -MAP_SIZE / 2; z < MAP_SIZE / 2; z += step) {
+                    const h1 = getH(x, z);
+                    const h2 = getH(x + step, z);
+                    const h3 = getH(x, z + step);
+
+                    // Punkt liegt zwischen h1 und h2 (linear interpolieren)
+                    if ((h1 < h && h2 >= h) || (h1 >= h && h2 < h)) {
+                        const t = (h - h1) / (h2 - h1);
+                        points.push(new THREE.Vector3(x + t * step, h + 0.1, z));
+                    }
+                    if ((h1 < h && h3 >= h) || (h1 >= h && h3 < h)) {
+                        const t = (h - h1) / (h3 - h1);
+                        points.push(new THREE.Vector3(x, h + 0.1, z + t * step));
+                    }
+                }
+            }
+
+            if (points.length > 1) {
+                const geo = new THREE.BufferGeometry();
+                geo.setAttribute('position', new THREE.BufferAttribute(
+                    new Float32Array(points.flatMap(p => [p.x, p.y, p.z])), 3
+                ));
+                const line = new THREE.Line(geo, lineMat);
+                contourGroup.add(line);
+            }
+        }
+
+        this.scene.add(contourGroup);
+        this.contourLines = contourGroup;
+    },
+
+    createWaterBorder() {
+        // Seegrenze: Kontur der Landmasse bei Höhe ~2
+        const waterLevel = 2;
+        const points = [];
+        const step = MAP_SIZE / 60;
+
+        for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 60) {
+            let r = 20;
+            let found = false;
+            while (r < MAP_SIZE * 0.6 && !found) {
+                const x = Math.cos(angle) * r;
+                const z = Math.sin(angle) * r;
+                const h = getH(x, z);
+                if (h > waterLevel && !found) {
+                    points.push(new THREE.Vector3(x, waterLevel + 0.2, z));
+                    found = true;
+                }
+                r += step;
+            }
+        }
+
+        if (points.length > 3) {
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(
+                new Float32Array(points.flatMap(p => [p.x, p.y, p.z])), 3
+            ));
+            const mat = new THREE.LineBasicMaterial({
+                color: 0x4488cc,
+                transparent: true,
+                opacity: 0.8,
+                linewidth: 2
+            });
+            this.waterBorder = new THREE.Line(geo, mat);
+            this.scene.add(this.waterBorder);
+        }
+    },
+
     setupToggle() {
-        // Toggle-Button im Menu
         let btn = document.getElementById('minimap-toggle');
         if (!btn) {
             btn = document.createElement('button');
             btn.id = 'minimap-toggle';
-            btn.textContent = '🗺 MINIMAP: AN';
+            btn.textContent = '🗺 KARTE: AN';
             btn.style.position = 'absolute';
             btn.style.top = '14px';
             btn.style.right = '14px';
@@ -54,8 +247,8 @@ const Minimap = {
 
             btn.addEventListener('click', () => {
                 this.enabled = !this.enabled;
-                btn.textContent = this.enabled ? '🗺 MINIMAP: AN' : '🗺 MINIMAP: AUS';
-                this.canvas.style.opacity = this.enabled ? '1' : '0.2';
+                btn.textContent = this.enabled ? '🗺 KARTE: AN' : '🗺 KARTE: AUS';
+                this.canvas.style.opacity = this.enabled ? '1' : '0.3';
                 this.canvas.style.pointerEvents = this.enabled ? 'auto' : 'none';
             });
 
@@ -75,194 +268,104 @@ const Minimap = {
     },
 
     setupTooltip() {
-        this.canvas.title = 'Taktische Minimap: Blau=Spieler, Rot=KI, Grün=Baum, Gelb=Bunker, Weiß=CP';
+        this.canvas.title = '3D Taktische Minimap: Grün=Grasland, Beige=Berge, Blau=Wasser, Linien=Höhenkonturen';
     },
 
-    updateSize() {
-        if (!terrain || !MAP_SIZE) return;
-        const mapHalf = MAP_SIZE / 2;
-        this.scale = this.canvas.width / MAP_SIZE * 0.95; // 95% padding
-        this.offsetX = this.canvas.width / 2;
-        this.offsetY = this.canvas.height / 2;
-    },
+    updateUnitMarkers() {
+        // Lösche alte Marker
+        this.unitMarkers.forEach(m => this.scene.remove(m));
+        this.unitMarkers = [];
 
-    worldToCanvas(x, z) {
-        const mapHalf = MAP_SIZE / 2;
-        const cx = this.offsetX + (x / MAP_SIZE) * this.canvas.width * 0.95;
-        const cy = this.offsetY + (z / MAP_SIZE) * this.canvas.height * 0.95;
-        return [cx, cy];
-    },
-
-    draw(dt) {
-        if (!this.enabled || !this.canvas) return;
-
-        const ctx = this.ctx;
-        const w = this.canvas.width;
-        const h = this.canvas.height;
-
-        // Hintergrund: dunkles Terrain
-        ctx.fillStyle = '#0a1520';
-        ctx.fillRect(0, 0, w, h);
-
-        // Rahmen
-        ctx.strokeStyle = 'rgba(0,240,255,0.4)';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(1, 1, w - 2, h - 2);
-
-        // Grid (optional)
-        ctx.strokeStyle = 'rgba(0,240,255,0.08)';
-        ctx.lineWidth = 0.5;
-        const gridSpacing = w / 6;
-        for (let i = 0; i <= 6; i++) {
-            ctx.beginPath();
-            ctx.moveTo(i * gridSpacing, 0);
-            ctx.lineTo(i * gridSpacing, h);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(0, i * gridSpacing);
-            ctx.lineTo(w, i * gridSpacing);
-            ctx.stroke();
-        }
-
-        // Wasser-Ring (Kartenrand)
-        const waterRadius = (MAP_SIZE * 0.5) * this.scale;
-        ctx.fillStyle = 'rgba(10, 40, 80, 0.25)';
-        ctx.beginPath();
-        ctx.arc(w / 2, h / 2, waterRadius, 0, Math.PI * 2);
-        ctx.fill();
-
-        // ── Bäume (grün, klein) ──
-        ctx.fillStyle = '#2a6b2e';
-        if (typeof trees !== 'undefined') {
-            trees.forEach(tree => {
-                if (!tree.alive) return;
-                const [cx, cy] = this.worldToCanvas(tree.mesh.position.x, tree.mesh.position.z);
-                ctx.beginPath();
-                ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-                ctx.fill();
-            });
-        }
-
-        // ── Bunker (gelb, Quadrat) ──
-        ctx.fillStyle = '#ffaa33';
-        if (typeof bunkers !== 'undefined') {
-            bunkers.forEach(bunker => {
-                if (!bunker.alive) return;
-                const [cx, cy] = this.worldToCanvas(bunker.mesh.position.x, bunker.mesh.position.z);
-                ctx.fillRect(cx - 3.5, cy - 3.5, 7, 7);
-            });
-        }
-
-        // ── Kontrollpunkte (weiß/Teamfarbe, Ring) ──
-        if (typeof controlPoints !== 'undefined') {
-            controlPoints.forEach(cp => {
-                const [cx, cy] = this.worldToCanvas(cp.pos.x, cp.pos.z);
-
-                // Neutral/Besitz-Farbe
-                if (cp.holder === 0) {
-                    ctx.strokeStyle = '#00e5ff';
-                    ctx.fillStyle = 'rgba(0, 229, 255, 0.15)';
-                } else if (cp.holder === 1) {
-                    ctx.strokeStyle = '#ff2d55';
-                    ctx.fillStyle = 'rgba(255, 45, 85, 0.15)';
-                } else {
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-                }
-
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-
-                // Capture-Progress-Balken (oben)
-                if (cp.capturingTeam >= 0 && cp.captureProgress > 0) {
-                    const pCol = cp.capturingTeam === 0 ? '#00e5ff' : '#ff2d55';
-                    ctx.fillStyle = pCol;
-                    const barW = 6 * (cp.captureProgress / 3);
-                    ctx.fillRect(cx - 3, cy - 12, barW, 2);
-                }
-            });
-        }
-
-        // ── Panzer (Dreiecke, Team-Farbe, zeigen Richtung) ──
+        // Panzer (kleine Kegel mit Richtung)
         const drawTank = (tank, color) => {
             if (!tank || !tank.alive) return;
-            const [cx, cy] = this.worldToCanvas(tank.mesh.position.x, tank.mesh.position.z);
-            const heading = tank.heading;
 
-            // Richtungs-Dreieck
-            const size = 5.5;
-            const x1 = cx + Math.cos(heading) * size;
-            const y1 = cy + Math.sin(heading) * size;
-            const x2 = cx + Math.cos(heading - 2.5) * size * 0.6;
-            const y2 = cy + Math.sin(heading - 2.5) * size * 0.6;
-            const x3 = cx + Math.cos(heading + 2.5) * size * 0.6;
-            const y3 = cy + Math.sin(heading + 2.5) * size * 0.6;
+            const tankGeo = new THREE.ConeGeometry(4, 8, 8);
+            const tankMat = new THREE.MeshStandardMaterial({
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.6,
+                metalness: 0.8
+            });
+            const tankMesh = new THREE.Mesh(tankGeo, tankMat);
 
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x3, y3);
-            ctx.closePath();
-            ctx.fill();
+            const pos = tank.mesh.position;
+            tankMesh.position.set(pos.x, getH(pos.x, pos.z) + 5, pos.z);
+            tankMesh.rotation.x = Math.PI / 2;
+            tankMesh.rotation.y = tank.heading;
+            tankMesh.castShadow = false;
 
-            // HP-Balken (oben)
-            const hpPct = tank.hp / tank.maxHP;
-            ctx.fillStyle = hpPct > 0.5 ? '#00ff88' : hpPct > 0.25 ? '#ffaa00' : '#ff3333';
-            ctx.fillRect(cx - 4, cy - 10, 8 * hpPct, 2);
+            this.scene.add(tankMesh);
+            this.unitMarkers.push(tankMesh);
         };
 
-        teams.forEach((team, teamIdx) => {
-            const color = teamIdx === 0 ? '#00e5ff' : '#ff2d55';
+        teams.forEach((team, idx) => {
+            const color = idx === 0 ? 0x00e5ff : 0xff2d55;
             team.forEach(tank => drawTank(tank, color));
         });
 
-        // ── Projektil (wenn aktiv) ──
-        if (typeof projectile !== 'undefined' && projectile && projectile.visible) {
-            const [cx, cy] = this.worldToCanvas(projectile.position.x, projectile.position.z);
-            ctx.fillStyle = projectile.material.color.getStyle();
-            ctx.beginPath();
-            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Projektil-Traj: Tracer zur nächsten erwarteten Position
-            if (typeof projectileVel !== 'undefined' && projectileVel) {
-                const nextX = projectile.position.x + projectileVel.x * 0.1;
-                const nextZ = projectile.position.z + projectileVel.z * 0.1;
-                const [nx, ny] = this.worldToCanvas(nextX, nextZ);
-                ctx.strokeStyle = projectile.material.color.getStyle();
-                ctx.lineWidth = 1.5;
-                ctx.globalAlpha = 0.6;
-                ctx.beginPath();
-                ctx.moveTo(cx, cy);
-                ctx.lineTo(nx, ny);
-                ctx.stroke();
-                ctx.globalAlpha = 1;
-            }
-        }
-
-        // ── Schilde (halbdurchsichtig) ──
-        if (typeof shields !== 'undefined') {
-            shields.forEach(shield => {
-                const [cx, cy] = this.worldToCanvas(shield.pos.x, shield.pos.z);
-                const shieldRadius = shield.currentRadius * this.scale;
-                ctx.strokeStyle = shield.team === 0 ? 'rgba(0, 229, 255, 0.4)' : 'rgba(255, 45, 85, 0.4)';
-                ctx.lineWidth = 1.5;
-                ctx.globalAlpha = 0.5;
-                ctx.beginPath();
-                ctx.arc(cx, cy, shieldRadius, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.globalAlpha = 1;
+        // Bunker (kleine Zylinder)
+        if (typeof bunkers !== 'undefined') {
+            bunkers.forEach(bunker => {
+                if (!bunker.alive) return;
+                const geo = new THREE.CylinderGeometry(3.5, 4, 3, 6);
+                const mat = new THREE.MeshStandardMaterial({
+                    color: 0xffaa33,
+                    metalness: 0.5
+                });
+                const mesh = new THREE.Mesh(geo, mat);
+                const pos = bunker.mesh.position;
+                mesh.position.set(pos.x, getH(pos.x, pos.z) + 2, pos.z);
+                this.scene.add(mesh);
+                this.unitMarkers.push(mesh);
             });
         }
 
-        // ── Info-Text (oben links) ──
-        ctx.fillStyle = 'rgba(0,240,255,0.7)';
-        ctx.font = '9px "Courier New", monospace';
-        ctx.fillText('TAKTISCHE MINIMAP', 6, 12);
+        // Kontrollpunkte (Flaggen)
+        if (typeof controlPoints !== 'undefined') {
+            controlPoints.forEach(cp => {
+                const col = cp.holder === 0 ? 0x00e5ff : cp.holder === 1 ? 0xff2d55 : 0xffffff;
+                const geo = new THREE.BoxGeometry(6, 12, 2);
+                const mat = new THREE.MeshStandardMaterial({
+                    color: col,
+                    emissive: col,
+                    emissiveIntensity: 0.8
+                });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.copy(cp.pos);
+                mesh.position.y = getH(cp.pos.x, cp.pos.z) + 8;
+                mesh.castShadow = false;
+                this.scene.add(mesh);
+                this.unitMarkers.push(mesh);
+            });
+        }
+
+        // Projektil (Sphäre)
+        if (typeof projectile !== 'undefined' && projectile && projectile.visible) {
+            const geo = new THREE.SphereGeometry(3, 8, 8);
+            const mat = new THREE.MeshBasicMaterial({
+                color: projectile.material.color,
+                emissive: projectile.material.color,
+                transparent: true,
+                opacity: 0.9
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(projectile.position);
+            this.scene.add(mesh);
+            this.unitMarkers.push(mesh);
+        }
+    },
+
+    draw(dt) {
+        if (!this.enabled || !this.renderer || !this.scene) return;
+
+        this.updateUnitMarkers();
+
+        try {
+            this.renderer.render(this.scene, this.camera);
+        } catch (e) {
+            console.warn('Minimap render failed:', e);
+        }
     },
 
     showToggleButton() {

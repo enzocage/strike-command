@@ -385,7 +385,7 @@ function showStatsScreen(winner) {
 
     // Minimap verstecken
     const mmCanvas = document.getElementById('minimap-canvas');
-    if (mmCanvas) mmCanvas.classList.remove('visible');
+    if (mmCanvas) mmCanvas.style.display = 'none';
     if (window._minimapToggle) window._minimapToggle.classList.remove('show');
 
     screen.classList.add('visible'); Audio.play('victory');
@@ -446,8 +446,7 @@ function startGame() {
     // Minimap anzeigen
     const mmCanvas = document.getElementById('minimap-canvas');
     if (mmCanvas) {
-        mmCanvas.classList.add('visible');
-        Minimap.updateSize();
+        mmCanvas.style.display = 'block';
     }
     if (window._minimapToggle) window._minimapToggle.classList.add('show');
 
