@@ -33,6 +33,8 @@ function calcTerrainH(x, z) {
         const rv = 1 - Math.abs(Math.sin(x*tp.f5 + z*tp.f6 + tp.p4));
         h += rv * rv * 18 * tp.ridge;
     }
+    // Mikro-Detail: feine Bodenwellen für plastischeres Terrain
+    h += Math.sin(x*0.085 + tp.p2) * Math.cos(z*0.092 + tp.p4) * 1.8 * amp;
     h += 20;
     return h * mask - 3;
 }
@@ -47,6 +49,72 @@ function disposeWorldMeshes() {
         cloudsGroup.traverse(c => { if(c.isMesh) c.geometry.dispose(); });
         cloudsGroup = null;
     }
+    if(window._scatterGroup) {
+        scene.remove(window._scatterGroup);
+        window._scatterGroup.traverse(c => { if(c.isMesh) c.geometry.dispose(); });
+        window._scatterGroup = null;
+    }
+}
+
+// ─── Streudekoration: Felsbrocken & Grasbüschel ───
+function spawnScatter() {
+    const g = new THREE.Group();
+    const rockMats = [
+        new THREE.MeshStandardMaterial({ color: 0x4a4f4c, roughness: 0.95, flatShading: true }),
+        new THREE.MeshStandardMaterial({ color: 0x5a5248, roughness: 0.95, flatShading: true }),
+        new THREE.MeshStandardMaterial({ color: 0x3a4040, roughness: 0.95, flatShading: true }),
+    ];
+    let placed = 0, tries = 0;
+    const rockCount = Math.round(MAP_SIZE / 18);
+    while(placed < rockCount && tries < rockCount * 10) {
+        tries++;
+        const x = (Math.random()-0.5) * MAP_SIZE * 0.85;
+        const z = (Math.random()-0.5) * MAP_SIZE * 0.85;
+        const h = getH(x, z);
+        if(h < 1 || h > 30) continue;
+        placed++;
+        const size = 1.5 + Math.random() * 5;
+        const rock = new THREE.Mesh(
+            new THREE.DodecahedronGeometry(size, 0),
+            rockMats[Math.floor(Math.random() * rockMats.length)]
+        );
+        rock.position.set(x, h + size * 0.15, z);
+        rock.scale.set(1 + Math.random()*0.6, 0.55 + Math.random()*0.35, 1 + Math.random()*0.6);
+        rock.rotation.set(Math.random()*0.4, Math.random()*Math.PI*2, Math.random()*0.4);
+        rock.castShadow = true; rock.receiveShadow = true;
+        g.add(rock);
+    }
+
+    // Grasbüschel: kleine helle Kegel, nur auf Grasland
+    const tuftMat = new THREE.MeshStandardMaterial({
+        color: 0x3e6b2e, emissive: 0x142a0a, emissiveIntensity: 0.3,
+        roughness: 1, flatShading: true
+    });
+    const tuftGeo = new THREE.ConeGeometry(0.8, 2.4, 4);
+    let tPlaced = 0, tTries = 0;
+    const tuftCount = Math.round(MAP_SIZE / 6);
+    while(tPlaced < tuftCount && tTries < tuftCount * 8) {
+        tTries++;
+        const x = (Math.random()-0.5) * MAP_SIZE * 0.8;
+        const z = (Math.random()-0.5) * MAP_SIZE * 0.8;
+        const h = getH(x, z);
+        if(h < 4 || h > 20) continue;
+        tPlaced++;
+        const cluster = new THREE.Group();
+        const n = 2 + Math.floor(Math.random()*3);
+        for(let k=0; k<n; k++) {
+            const t = new THREE.Mesh(tuftGeo, tuftMat);
+            t.position.set((Math.random()-0.5)*3, 1.0, (Math.random()-0.5)*3);
+            t.scale.setScalar(0.7 + Math.random()*0.8);
+            t.rotation.z = (Math.random()-0.5)*0.3;
+            cluster.add(t);
+        }
+        cluster.position.set(x, h, z);
+        g.add(cluster);
+    }
+
+    scene.add(g);
+    window._scatterGroup = g;
 }
 
 function createWorld(cfg) {
@@ -74,22 +142,44 @@ function createWorld(cfg) {
         }
     }
 
-    const cSand = new THREE.Color(0x7a6642);
-    const cGrass = new THREE.Color(0x1a3a1f);
-    const cRock = new THREE.Color(0x3d4540);
-    const cSnow = new THREE.Color(0xb8ccd4);
+    const cWetSand = new THREE.Color(0x5a4a32);
+    const cSand    = new THREE.Color(0x8a7448);
+    const cGrass   = new THREE.Color(0x1d4022);
+    const cGrass2  = new THREE.Color(0x2e5526);   // sonnigere Grasflecken
+    const cDry     = new THREE.Color(0x4f5a2a);   // trockene Steppe
+    const cRock    = new THREE.Color(0x474f4a);
+    const cRock2   = new THREE.Color(0x32383a);
+    const cSnow    = new THREE.Color(0xcfdde4);
 
     for(let i=0; i<pos.length; i+=3) {
         const x = pos[i], z = pos[i+2];
         const h = calcH(x, z);
         pos[i+1] = h;
-        
-        let col = cGrass.clone();
-        if(h < 3) col.lerp(cSand, Math.max(0, 1 - (h/3)));
-        else if(h > 20 && h < 28) col.lerp(cRock, (h-20)/8);
-        else if(h >= 28) col = cSnow;
 
-        const shade = 1.0 - (Math.random() * 0.15);
+        // Hangneigung per Differenzenquotient → Felsen an Steilhängen
+        const e = 2.0;
+        const sx = (calcH(x+e, z) - calcH(x-e, z)) / (2*e);
+        const sz = (calcH(x, z+e) - calcH(x, z-e)) / (2*e);
+        const slope = Math.sqrt(sx*sx + sz*sz);
+
+        // Großflächige Gras-Variation (Flecken aus Sinus-Rauschen)
+        const patch = Math.sin(x*0.021 + z*0.017) + Math.sin(x*0.008 - z*0.011) * 0.7;
+
+        let col = cGrass.clone();
+        if(patch > 0.4)       col.lerp(cGrass2, Math.min(1, (patch-0.4)*1.2));
+        else if(patch < -0.8) col.lerp(cDry,    Math.min(1, (-patch-0.8)*1.4));
+
+        if(h < 1.2)       col.copy(cWetSand);
+        else if(h < 4)    col.lerp(cSand, Math.max(0, 1 - ((h-1.2)/2.8)));
+        else if(h > 20 && h < 28) col.lerp(cRock, (h-20)/8);
+        else if(h >= 28)  col.copy(cSnow);
+
+        // Steile Flächen werden felsig — unabhängig von der Höhe
+        if(slope > 0.5 && h < 28) col.lerp(slope > 0.85 ? cRock2 : cRock, Math.min(1, (slope-0.5)*1.6));
+
+        // Hangschattierung: Süd-/Westhänge dunkler, plus feines Rauschen
+        const slopeShade = 1.0 - Math.max(0, Math.min(0.22, (sx + sz) * 0.12));
+        const shade = slopeShade * (1.0 - Math.random() * 0.1);
         colors[i] = col.r * shade; colors[i+1] = col.g * shade; colors[i+2] = col.b * shade;
     }
 
@@ -187,6 +277,7 @@ varying vec2  vUv2;
     scene.add(foamRing);
     window._foamRing = foamRing;
 
+    spawnScatter();
     spawnClouds();
 }
 
@@ -279,13 +370,22 @@ function spawnTrees(count) {
     const leavesGeo1 = new THREE.ConeGeometry(9, 20, 5); leavesGeo1.translate(0, 15, 0);
     const leavesGeo2 = new THREE.ConeGeometry(7, 18, 5); leavesGeo2.translate(0, 25, 0);
     const leavesGeo3 = new THREE.ConeGeometry(5, 15, 5); leavesGeo3.translate(0, 35, 0);
+    const canopyGeo1 = new THREE.IcosahedronGeometry(8, 0);  canopyGeo1.translate(0, 16, 0);
+    const canopyGeo2 = new THREE.IcosahedronGeometry(6, 0);  canopyGeo2.translate(2.5, 22, 1);
+    const canopyGeo3 = new THREE.IcosahedronGeometry(5, 0);  canopyGeo3.translate(-2.5, 21, -1.5);
+    const tallTrunkGeo = new THREE.CylinderGeometry(0.9, 1.5, 16, 5); tallTrunkGeo.translate(0, 8, 0);
+    const branchGeo = new THREE.CylinderGeometry(0.25, 0.5, 7, 4);
 
     const trunkMat = new THREE.MeshStandardMaterial({color: 0x1a0e06, flatShading: true, roughness: 1});
-    const leavesMat = new THREE.MeshStandardMaterial({
-        color: 0x0d2210, emissive: 0x001a05, emissiveIntensity: 0.4,
-        flatShading: true, roughness: 0.8
-    });
-    window._treeLeavesMat = leavesMat;
+    const deadMat  = new THREE.MeshStandardMaterial({color: 0x2e2620, flatShading: true, roughness: 1});
+    // Drei Laub-Paletten — alle werden vom LightingDirector mitgetönt
+    const leafMats = [
+        new THREE.MeshStandardMaterial({ color: 0x0d2210, emissive: 0x001a05, emissiveIntensity: 0.4, flatShading: true, roughness: 0.8 }),
+        new THREE.MeshStandardMaterial({ color: 0x15301a, emissive: 0x001a05, emissiveIntensity: 0.4, flatShading: true, roughness: 0.8 }),
+        new THREE.MeshStandardMaterial({ color: 0x2a3d12, emissive: 0x0a1a02, emissiveIntensity: 0.4, flatShading: true, roughness: 0.8 }),
+    ];
+    window._treeLeavesMat = leafMats[0];
+    window._treeLeafMats = leafMats;
 
     // Zufallspositionen verwerfen oft (Wasser/Gipfel) — daher Versuche statt fixe Schleife
     let placedTrees = 0, treeTries = 0;
@@ -297,17 +397,44 @@ function spawnTrees(count) {
         if(h > 3 && h < 25) {
             placedTrees++;
             const treeGroup = new THREE.Group();
-            const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.castShadow = true;
-            const l1 = new THREE.Mesh(leavesGeo1, leavesMat); l1.castShadow = true;
-            const l2 = new THREE.Mesh(leavesGeo2, leavesMat); l2.castShadow = true;
-            const l3 = new THREE.Mesh(leavesGeo3, leavesMat); l3.castShadow = true;
-            
-            treeGroup.add(trunk); treeGroup.add(l1); treeGroup.add(l2); treeGroup.add(l3);
+            const leaves = [];
+            const roll = Math.random();
+            const leafMat = leafMats[Math.floor(Math.random() * leafMats.length)];
+
+            if(roll < 0.55) {
+                // Kiefer (3 Kegel-Etagen)
+                const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.castShadow = true; treeGroup.add(trunk);
+                [leavesGeo1, leavesGeo2, leavesGeo3].forEach(geo => {
+                    const l = new THREE.Mesh(geo, leafMat); l.castShadow = true;
+                    treeGroup.add(l); leaves.push(l);
+                });
+            } else if(roll < 0.85) {
+                // Laubbaum (runde Kronen-Blobs)
+                const trunk = new THREE.Mesh(tallTrunkGeo, trunkMat); trunk.castShadow = true; treeGroup.add(trunk);
+                [canopyGeo1, canopyGeo2, canopyGeo3].forEach(geo => {
+                    const l = new THREE.Mesh(geo, leafMat); l.castShadow = true;
+                    treeGroup.add(l); leaves.push(l);
+                });
+            } else {
+                // Toter Baum (kahle Äste)
+                const trunk = new THREE.Mesh(tallTrunkGeo, deadMat); trunk.castShadow = true; treeGroup.add(trunk);
+                for(let b = 0; b < 3; b++) {
+                    const br = new THREE.Mesh(branchGeo, deadMat);
+                    br.position.set(0, 8 + b * 3, 0);
+                    br.rotation.z = 0.7 + Math.random() * 0.6;
+                    br.rotation.y = b * 2.1 + Math.random();
+                    br.castShadow = true;
+                    treeGroup.add(br);
+                }
+            }
+
+            const s = 0.75 + Math.random() * 0.55;
+            treeGroup.scale.setScalar(s);
             treeGroup.position.set(x, h, z);
             treeGroup.rotation.y = Math.random() * Math.PI;
 
             scene.add(treeGroup);
-            trees.push({ mesh: treeGroup, hp: 100, alive: true, leaves: [l1, l2, l3] });
+            trees.push({ mesh: treeGroup, hp: 100, alive: true, leaves });
         }
     }
 }
@@ -419,9 +546,32 @@ function spawnControlPoints() {
         pole.position.y = p.y + 14;
         scene.add(pole);
 
-        cpMeshes.push(mesh, ring, pole);
+        // Vertikale Lichtsäule (weithin sichtbar, Farbe = Besitzstatus)
+        const beamGeo = new THREE.CylinderGeometry(3, 5, 90, 8, 1, true);
+        const beamMat = new THREE.MeshBasicMaterial({
+            color: 0x445566, transparent: true, opacity: 0.1,
+            blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+        });
+        const beam = new THREE.Mesh(beamGeo, beamMat);
+        beam.position.copy(p); beam.position.y = p.y + 45;
+        beam.userData.baseOpacity = 0.08;
+        beam.renderOrder = 4;
+        scene.add(beam);
+
+        // Wehende Flagge am Mast
+        const flagGeo = new THREE.PlaneGeometry(9, 5, 1, 1);
+        flagGeo.translate(4.5, 0, 0);
+        const flagMat = new THREE.MeshStandardMaterial({
+            color: 0x445566, emissive: 0x222a33, emissiveIntensity: 0.5,
+            side: THREE.DoubleSide, flatShading: true
+        });
+        const flag = new THREE.Mesh(flagGeo, flagMat);
+        flag.position.copy(p); flag.position.y = p.y + 23;
+        scene.add(flag);
+
+        cpMeshes.push(mesh, ring, pole, beam, flag);
         controlPoints.push({
-            pos: p.clone(), holder: -1, ring, pole, platform: mesh, index: i,
+            pos: p.clone(), holder: -1, ring, pole, platform: mesh, beam, flag, index: i,
             captureProgress: 0,   // 0..3: Runden ununterbrochener Präsenz
             capturingTeam: -1,    // Wer gerade einnimmt
             prevHolder: -1,       // Für Rückeroberungs-Bonus
@@ -488,6 +638,18 @@ function updateControlPoints() {
             : 0x334455;
         cp.ring.material.color.setHex(ringCol);
         cp.ring.material.opacity = progress >= 1 ? 0.7 : 0.35 + progress * 0.35;
+
+        // Lichtsäule + Flagge folgen dem Besitzstatus
+        if (cp.beam) {
+            cp.beam.material.color.setHex(ringCol);
+            cp.beam.userData.baseOpacity =
+                (cp.holder >= 0 && progress >= 1) ? 0.22 :
+                cp.capturingTeam >= 0 ? 0.14 : 0.06;
+        }
+        if (cp.flag) {
+            cp.flag.material.color.setHex(ringCol);
+            cp.flag.material.emissive.setHex(ringCol);
+        }
 
         const platCol = cp.holder === 0 ? 0x003344 : cp.holder === 1 ? 0x440011 : 0x223344;
         cp.platform.material.color.setHex(platCol);

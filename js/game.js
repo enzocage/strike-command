@@ -49,6 +49,7 @@ function init() {
     createWorld();
     spawnTrees(); spawnBunkers(); // Menü-Hintergrund
     setupFX();
+    initVisualEnhancements();
     TacFeed.init();
     LightingDirector.init();
     Cam.init();
@@ -604,7 +605,13 @@ function cycleTank(dir) {
 function syncUIToTank() {
     const t = teams[currentPlayer][activeTankIdx[currentPlayer]]; if(!t) return;
     document.getElementById('i-rot').value = Math.round(t.settings.rot); document.getElementById('i-ang').value = Math.round(t.settings.ang); document.getElementById('i-pow').value = Math.round(t.settings.pow);
-    document.getElementById('v-rot').innerText = Math.round(t.settings.rot) + '°'; document.getElementById('v-ang').innerText = Math.round(t.settings.ang) + '°'; document.getElementById('v-pow').innerText = Math.round(t.settings.pow) + '%';
+    [['v-rot', Math.round(t.settings.rot) + '°'], ['v-ang', Math.round(t.settings.ang) + '°'], ['v-pow', Math.round(t.settings.pow) + '%']].forEach(([id, txt]) => {
+        const el = document.getElementById(id);
+        if(el.innerText !== txt) {
+            el.innerText = txt;
+            el.classList.remove('changed'); void el.offsetWidth; el.classList.add('changed');
+        }
+    });
     document.documentElement.style.setProperty('--p1-color', currentPlayer === 0 ? '#00e5ff' : '#ff0055'); 
     t.turret.rotation.y = -t.settings.rot * Math.PI/180; t.barrelJoint.rotation.x = -t.settings.ang * Math.PI/180;
 }
@@ -1124,6 +1131,19 @@ function animate() {
                         }
                     }
 
+                    if(!markerPlaced) {
+                        for(const b of bunkers) {
+                            if(b.alive && simPos.y < b.mesh.position.y + 21 &&
+                               Math.hypot(simPos.x - b.mesh.position.x, simPos.z - b.mesh.position.z) < 20) {
+                                hitGround = true; impactMarker.position.copy(simPos);
+                                const n = getNormal(simPos.x, simPos.z);
+                                impactMarker.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), n);
+                                markerPlaced = true;
+                                break;
+                            }
+                        }
+                    }
+
                     if(!markerPlaced && simPos.y <= getH(simPos.x, simPos.z)) {
                         hitGround = true; impactMarker.position.copy(simPos);
                         const n = getNormal(simPos.x, simPos.z);
@@ -1367,6 +1387,7 @@ function animate() {
         screenShake -= dt * 60; if(screenShake < 0) screenShake = 0;
     }
 
+    updateVisualEffects(dt);
     renderer.render(scene, camera);
 }
 

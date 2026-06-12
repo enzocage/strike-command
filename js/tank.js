@@ -9,32 +9,103 @@ function createTank(pIdx, id) {
     mat.userData.isTankMat = true;
     const darkMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.8, metalness: 0.4, flatShading: true });
     const detailMat = new THREE.MeshStandardMaterial({ color: 0x505050, metalness: 0.9, roughness: 0.3, flatShading: true });
-    
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x6a7075, metalness: 0.95, roughness: 0.22, flatShading: true });
+    const glowMat = new THREE.MeshStandardMaterial({
+        color: mainColor, emissive: mainColor, emissiveIntensity: 1.6,
+        metalness: 0.2, roughness: 0.4
+    });
+    glowMat.userData.baseColor = mainColor;
+    glowMat.userData.isTankMat = true;
+    glowMat.userData.emissiveBase = 1.6;
+
     const bodyGroup = new THREE.Group(); bodyGroup.position.y = 1.8;
-    const body = new THREE.Mesh(new THREE.BoxGeometry(7, 2.5, 9), mat); body.castShadow = true; bodyGroup.add(body);
-    const ex1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.5, 0.8), darkMat); ex1.position.set(-2, 1, -4.5); bodyGroup.add(ex1);
-    const ex2 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.5, 0.8), darkMat); ex2.position.set(2, 1, -4.5); bodyGroup.add(ex2);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(7, 2.2, 9), mat); body.castShadow = true; bodyGroup.add(body);
+
+    // Geneigte Frontpanzerung (Glacis) + Heckplatte
+    const glacis = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.6, 3.2), mat);
+    glacis.position.set(0, 1.15, 3.6); glacis.rotation.x = -0.42; glacis.castShadow = true; bodyGroup.add(glacis);
+    const rearPlate = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.5, 2.2), mat);
+    rearPlate.position.set(0, 1.1, -3.8); rearPlate.rotation.x = 0.35; rearPlate.castShadow = true; bodyGroup.add(rearPlate);
+
+    // Leuchtende Team-Streifen entlang der Flanken
+    [-3.55, 3.55].forEach(x => {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.35, 7.5), glowMat);
+        strip.position.set(x, 0.4, 0); bodyGroup.add(strip);
+    });
+
+    // Auspuffrohre
+    const exGeo = new THREE.CylinderGeometry(0.32, 0.38, 1.8, 6);
+    [-2, 2].forEach(x => {
+        const ex = new THREE.Mesh(exGeo, darkMat);
+        ex.rotation.x = 0.5; ex.position.set(x, 1.5, -4.4); ex.castShadow = true; bodyGroup.add(ex);
+    });
+
+    // Werkzeugkiste + Tankfässer auf dem Heck
+    const toolbox = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.8, 1.4), darkMat);
+    toolbox.position.set(-1.8, 1.4, -2.8); toolbox.castShadow = true; bodyGroup.add(toolbox);
+    const barrel1 = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.6, 8), detailMat);
+    barrel1.rotation.z = Math.PI/2; barrel1.position.set(1.6, 1.45, -3.0); barrel1.castShadow = true; bodyGroup.add(barrel1);
+
     group.add(bodyGroup); parts.body = bodyGroup;
 
     parts.tracks = [];
-    [-3.5, 3.5].forEach(x => { 
+    [-3.5, 3.5].forEach(x => {
         const tGroup = new THREE.Group(); tGroup.position.set(x, 1.25, 0);
         const track = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.5, 10), darkMat); track.castShadow = true; tGroup.add(track);
+        // Seitenschürze über der Kette
+        const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.1, 9.6), mat);
+        skirt.position.set(x > 0 ? 0.95 : -0.95, 0.9, 0); skirt.castShadow = true; tGroup.add(skirt);
         for(let wz = -3.5; wz <= 3.5; wz += 2.3) {
-            const wheel = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 2, 8), detailMat);
-            wheel.rotation.z = Math.PI/2; wheel.position.set(0, -0.2, wz); tGroup.add(wheel);
+            // Laufrolle: Felge + Gummi-Lauffläche + Nabe
+            const rim = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 1.9, 10), steelMat);
+            rim.rotation.z = Math.PI/2; rim.position.set(0, -0.2, wz); rim.castShadow = true; tGroup.add(rim);
+            const tread = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.18, 1.2, 10), darkMat);
+            tread.rotation.z = Math.PI/2; tread.position.set(0, -0.2, wz); tGroup.add(tread);
+            const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 2.05, 6), detailMat);
+            hub.rotation.z = Math.PI/2; hub.position.set(0, -0.2, wz); tGroup.add(hub);
         }
-        group.add(tGroup); parts.tracks.push(tGroup); 
+        group.add(tGroup); parts.tracks.push(tGroup);
     });
 
     const turretGroup = new THREE.Group(); turretGroup.position.y = 3.5;
-    const head = new THREE.Mesh(new THREE.BoxGeometry(4.5, 2, 5.5), mat); head.castShadow = true; turretGroup.add(head);
-    const hatch = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.3, 8), darkMat); hatch.position.set(0, 1.1, -1); turretGroup.add(hatch);
-    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4), detailMat); antenna.position.set(-1.5, 2, -1.5); turretGroup.add(antenna);
+    // Turmdrehkranz
+    const tRing = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.8, 0.6, 12), steelMat);
+    tRing.position.y = -0.9; tRing.castShadow = true; turretGroup.add(tRing);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(4.5, 1.8, 5.5), mat); head.castShadow = true; turretGroup.add(head);
+    // Geneigte Turmfront
+    const tFront = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.6, 1.8), mat);
+    tFront.position.set(0, 0.85, 2.4); tFront.rotation.x = -0.5; tFront.castShadow = true; turretGroup.add(tFront);
+    const hatch = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.3, 8), darkMat); hatch.position.set(0, 1.0, -1); turretGroup.add(hatch);
+    // Kommandanten-Optik (leuchtet in Teamfarbe)
+    const optic = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.4, 0.7), glowMat);
+    optic.position.set(1.4, 1.05, 0.8); turretGroup.add(optic);
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.07, 4.5), detailMat); antenna.position.set(-1.5, 2.2, -1.5); turretGroup.add(antenna);
+    const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6), glowMat);
+    antennaTip.position.set(-1.5, 4.45, -1.5); turretGroup.add(antennaTip);
+    // Nebelwerfer-Batterien an den Turmseiten
+    [-1, 1].forEach(s => {
+        for(let k = 0; k < 3; k++) {
+            const sl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.9, 6), detailMat);
+            sl.position.set(s * 2.4, 0.3, 1.2 - k * 0.7);
+            sl.rotation.x = -0.7; sl.rotation.z = s * 0.45;
+            turretGroup.add(sl);
+        }
+    });
 
-    const barrelJoint = new THREE.Group(); barrelJoint.position.z = 2.5; 
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 8, 8), darkMat); barrel.rotation.x = Math.PI/2; barrel.position.z = 4; barrel.castShadow = true;
-    barrelJoint.add(barrel); turretGroup.add(barrelJoint); group.add(turretGroup); parts.turret = turretGroup;
+    const barrelJoint = new THREE.Group(); barrelJoint.position.z = 2.5;
+    // Verschlussblock
+    const breech = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.2, 1.6), darkMat);
+    breech.position.z = -0.3; breech.castShadow = true; barrelJoint.add(breech);
+    // Hauptrohr
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.48, 7.2, 10), steelMat);
+    barrel.rotation.x = Math.PI/2; barrel.position.z = 3.9; barrel.castShadow = true; barrelJoint.add(barrel);
+    // Thermoschutzhülse
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.56, 0.6, 1.6, 10), darkMat);
+    sleeve.rotation.x = Math.PI/2; sleeve.position.z = 2.4; barrelJoint.add(sleeve);
+    // Mündungsbremse (Spitze bei z≈9, passend zum Abschusspunkt)
+    const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.55, 1.5, 10), darkMat);
+    muzzle.rotation.x = Math.PI/2; muzzle.position.z = 8.2; muzzle.castShadow = true; barrelJoint.add(muzzle);
+    turretGroup.add(barrelJoint); group.add(turretGroup); parts.turret = turretGroup;
 
     let placed = false; let x, z, y; let attempts = 0;
     

@@ -170,17 +170,20 @@ const LightingDirector = {
             const base = this._current.atmoIntensity;
             window._atmoLight.intensity = base * (0.85 + 0.3 * pulse);
         }
-        // Baum-Emissive pulsiert
-        if(window._treeLeavesMat && this._current) {
-            window._treeLeavesMat.emissiveIntensity =
-                this._current.treeEmissiveIntensity * (0.7 + 0.6 * fastPulse);
+        // Baum-Emissive pulsiert (alle Laub-Paletten)
+        if(this._current) {
+            const mats = window._treeLeafMats || (window._treeLeavesMat ? [window._treeLeavesMat] : []);
+            mats.forEach(m => {
+                m.emissiveIntensity = this._current.treeEmissiveIntensity * (0.7 + 0.6 * fastPulse);
+            });
         }
         // Tank-Emissive pulsiert
         if(this._current) {
             const boost = this._current.tankEmissiveBoost;
             scene.traverse(obj => {
                 if(obj.isMesh && obj.material && obj.material.userData && obj.material.userData.isTankMat) {
-                    obj.material.emissiveIntensity = 0.15 * boost * (0.8 + 0.4 * fastPulse);
+                    const base = obj.material.userData.emissiveBase || 0.15;
+                    obj.material.emissiveIntensity = base * boost * (0.8 + 0.4 * fastPulse);
                 }
             });
         }
@@ -264,11 +267,12 @@ const LightingDirector = {
             scene.fog.density = s.fogDensity + rainBoost;
         }
         if(scene.background) scene.background.setHex(s.bgColor);
-        // Trees
-        if(window._treeLeavesMat) {
-            window._treeLeavesMat.emissive.setHex(s.treeEmissive);
-            window._treeLeavesMat.emissiveIntensity = s.treeEmissiveIntensity;
-        }
+        // Trees (alle Laub-Paletten)
+        const leafMats = window._treeLeafMats || (window._treeLeavesMat ? [window._treeLeavesMat] : []);
+        leafMats.forEach(m => {
+            m.emissive.setHex(s.treeEmissive);
+            m.emissiveIntensity = s.treeEmissiveIntensity;
+        });
         // toneMapping exposure — heller in nuklearem Winter, dunkler in Neon Night
         if(renderer) {
             renderer.toneMappingExposure = s.sunIntensity > 2.5 ? 1.2 : s.sunIntensity < 0.5 ? 0.85 : 1.05;
