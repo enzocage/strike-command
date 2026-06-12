@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Strike Command: Fog of War</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="vignette"></div>
+<div class="grain"></div>
+<div id="game-canvas"></div>
+<canvas id="rain-canvas"></canvas>
+<div id="lightning-flash"></div>
+<div id="fog-overlay"></div>
+<div id="weather-indicator">&#9928; REGEN</div>
+
+<div id="ui-layer">
+    <div id="main-menu" class="glass-panel" style="display:block;">
+        <div class="menu-logo">STRIKE<br>COMMAND</div>
+        <div class="menu-sub">Fog of War</div>
+        <div class="menu-divider"></div>
+        <div id="menu-opts">
+            <button id="btn-1p">&#9889; 1 Spieler (vs KI)</button>
+            <div style="height: 10px;"></div>
+            <button id="btn-2p">&#9876; 2 Spieler (Lokal)</button>
+            <div style="height: 10px;"></div>
+            <button id="btn-rules" style="background:rgba(255,255,255,0.03); color:rgba(200,224,240,0.6); border-color:rgba(255,255,255,0.1); font-size:11px; letter-spacing:3px;">&#9432; SPIELREGELN</button>
+        </div>
+        <div id="ai-opts" style="display:none;">
+            <p style="margin-top:0;">KI Schwierigkeit</p>
+            <button onclick="startGameMode(1)">&#9655; Leicht</button>
+            <div style="height: 8px;"></div>
+            <button onclick="startGameMode(2)">&#9655; Mittel</button>
+            <div style="height: 8px;"></div>
+            <button onclick="startGameMode(3)" style="border-color:rgba(255,45,85,0.5); color:#ff8099;">&#9655; Schwer</button>
+            <div style="height: 14px;"></div>
+            <button onclick="showMenuOpts()" style="background:rgba(255,255,255,0.03); color:rgba(255,255,255,0.35); font-size:11px;">&#8592; Zurück</button>
+        </div>
+    </div>
+
+    <div id="turn-banner" class="glass-panel">
+        <div class="banner-tag">// Befehlswechsel</div>
+        <div id="tb-team">Spieler</div>
+        <div id="tb-score">BLAU: 10 &nbsp;&mdash;&nbsp; ROT: 10</div>
+    </div>
+
+    <!-- Regelwerk Modal -->
+    <div id="rules-modal">
+        <div class="rules-panel">
+            <div class="rules-header">
+                <span class="rules-header-title">// SPIELREGELN &amp; HANDBUCH</span>
+                <button class="rules-close" id="btn-rules-close">&#10005;</button>
+            </div>
+            <div class="rules-body">
+
+                <!-- Ziel des Spiels -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#127942;</span>
+                        <span class="rules-section-title">Ziel des Spiels</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Es gibt <strong>zwei Wege zum Sieg</strong>: Entweder vernichtest du alle feindlichen Panzer, oder du erreichst als Erster <span class="hl-gold">8 Kontrollpunkt-Punkte</span>. Punkte werden pro Runde vergeben &#8212; für jeden Kontrollpunkt den du hältst, erhältst du einen punkt. Wer zuerst ein Ziel erreicht, gewinnt sofort.
+                    </div>
+                </div>
+
+                <!-- Rundenablauf -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#128260;</span>
+                        <span class="rules-section-title">Rundenablauf</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Das Spiel läuft in abwechselnden Zügen. Jeder Zug besteht aus drei Phasen:
+                        <br><br>
+                        <strong>1. Tankauswahl</strong> &#8212; Wähle einen deiner lebenden Panzer per Klick oder mit den Pfeiltasten <span class="rules-kbd">&#9668;</span><span class="rules-kbd">&#9658;</span>. Bestätige mit <span class="hl">ZIEL BESTÄTIGEN</span> oder <span class="rules-kbd">Enter</span>.
+                        <br><br>
+                        <strong>2. Aktionsphase</strong> &#8212; Du hast <span class="hl">3 Aktionspunkte (AP)</span>. Fahre, richte den Turm aus und feuere. Wenn alle AP verbraucht sind, endet dein Zug automatisch.
+                        <br><br>
+                        <strong>3. Positionierungsphase</strong> &#8212; Nach dem Schuss hat der andere Spieler kurz Zeit, seinen ausgewählten Tank zu repositionieren, bevor der Zug wechselt.
+                        <div class="rules-tip">Nutze die Positionierungsphase weise! Mit dem verbleibenden Treibstoff kannst du hinter Deckung rücken, bevor der Feind feuert.</div>
+                    </div>
+                </div>
+
+                <!-- Aktionspunkte -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#9889;</span>
+                        <span class="rules-section-title">Aktionspunkte (AP)</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Jeder Tank bekommt pro Zug <span class="hl">3 AP</span>. Die leuchtende Anzeige oben in der Mitte zeigt deine verbleibenden Punkte in Echtzeit.
+                        <table class="rules-table">
+                            <tr><th>Aktion</th><th>AP-Kosten</th><th>Hinweis</th></tr>
+                            <tr><td><strong>Bewegen</strong> (WASD / D-Pad)</td><td><span class="hl">1 AP</span></td><td>Einmalig pro Zug, beliebig lange</td></tr>
+                            <tr><td><strong>Feuern</strong></td><td><span class="hl-red">2 AP</span></td><td>Einmalig pro Zug möglich</td></tr>
+                            <tr><td><strong>Schild einsetzen</strong></td><td><span class="hl-red">2 AP</span></td><td>Ersetzt das Feuern in diesem Zug</td></tr>
+                        </table>
+                        <div class="rules-tip">Du kannst entweder <em>Bewegen + Feuern</em> (1+2=3 AP) oder <em>Zweimal Bewegen</em> (1+1+1=3 AP, aber kein Schuss) wählen. Plane voraus!</div>
+                    </div>
+                </div>
+
+                <!-- Steuerung -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#9881;</span>
+                        <span class="rules-section-title">Steuerung</span>
+                    </div>
+                    <div class="rules-section-body">
+                        <table class="rules-table">
+                            <tr><th>Eingabe</th><th>Funktion</th></tr>
+                            <tr><td><span class="rules-kbd">W</span><span class="rules-kbd">A</span><span class="rules-kbd">S</span><span class="rules-kbd">D</span> / D-Pad</td><td>Panzer bewegen</td></tr>
+                            <tr><td>Maus ziehen (auf Panzer)</td><td>Turm ausrichten (horizontal + Neigung)</td></tr>
+                            <tr><td>Mausrad / Scroll</td><td>Schussstärke einstellen (beim Zielen)</td></tr>
+                            <tr><td>Maus ziehen (freie Fläche)</td><td>Kamera rotieren</td></tr>
+                            <tr><td>Mausrad (frei)</td><td>Kamera zoomen</td></tr>
+                            <tr><td><span class="rules-kbd">Enter</span></td><td>Feuer! / Auswahl bestätigen</td></tr>
+                            <tr><td><span class="rules-kbd">&#9668;</span><span class="rules-kbd">&#9658;</span> / <span class="rules-kbd">A</span><span class="rules-kbd">D</span> (Auswahl)</td><td>Panzer wechseln</td></tr>
+                        </table>
+                        <br>
+                        <strong>Schussparameter:</strong> Turm-Rotation, Neigungswinkel und Kraft können auch über die <span class="hl">Schieberegler</span> unten eingestellt werden. Höherer Winkel = steilere Bahn (ideal für Hindernisse). Höhere Kraft = weitere Reichweite.
+                    </div>
+                </div>
+
+                <!-- Munitionstypen -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#128163;</span>
+                        <span class="rules-section-title">Munitionstypen</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Wähle deine Munition <strong>vor dem Schuss</strong> links unten im HUD. Der gewählte Typ beeinflusst Projektilfarbe, Geschwindigkeit und Wirkung.
+                        <table class="rules-table">
+                            <tr><th>Typ</th><th>Vorrat</th><th>Schaden</th><th>Radius</th><th>Taktik</th></tr>
+                            <tr><td>&#128165; <strong>Standard</strong></td><td><span class="hl">&#8734;</span></td><td>&#215;1.0</td><td>&#215;1.0</td><td>Ausgewogen, immer verfügbar</td></tr>
+                            <tr><td>&#9889; <strong>Panzerbrechend</strong></td><td><span class="hl-gold">4&#215;</span></td><td><span class="hl-red">&#215;1.8</span></td><td>&#215;0.4</td><td>Einzelziel-Killer, präziser Treffer nötig</td></tr>
+                            <tr><td>&#128163; <strong>Splitter</strong></td><td><span class="hl-gold">4&#215;</span></td><td>&#215;0.7</td><td><span class="hl">&#215;2.0</span></td><td>Ideal gegen geclusterte Feinde</td></tr>
+                            <tr><td>&#127787; <strong>Rauchgranate</strong></td><td><span class="hl-gold">3&#215;</span></td><td>0</td><td>&#8212;</td><td>Blendet KI-Sicht für 10 Sekunden</td></tr>
+                        </table>
+                        <div class="rules-tip">Rauchgranaten sind gegen die KI besonders stark &#8212; ein geblendeter Feind kann keine sichtbaren Ziele angreifen und gibt seinen Zug ohne Schuss auf!</div>
+                    </div>
+                </div>
+
+                <!-- Kontrollpunkte -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#127988;</span>
+                        <span class="rules-section-title">Kontrollpunkte</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Auf der Karte befinden sich <strong>3 Kontrollpunkte</strong>: <span class="hl">Alpha</span>, <span class="hl">Bravo</span> und <span class="hl">Charlie</span>. Sie sind an leuchtenden Bodenringen erkennbar.
+                        <br><br>
+                        <strong>Einnehmen:</strong> Bewege einen Panzer in den Ring. Solange kein Feind ebenfalls im Ring ist, gehört der Punkt dir. Bei gleichzeitiger Präsenz beider Seiten gilt er als <span class="hl-gold">Umkämpft</span> &#8212; niemand bekommt Punkte.
+                        <br><br>
+                        <strong>Punktevergabe:</strong> Am Ende jeder Runde erhält jede Seite +1 Punkt für jeden von ihr gehaltenen Kontrollpunkt. Wer <span class="hl-gold">8 Punkte</span> zuerst erreicht, gewinnt &#8212; auch wenn noch Feindpanzer leben.
+                        <div class="rules-tip">Halte mehrere Kontrollpunkte gleichzeitig, um Punkte zu stapeln. Mit 3 gehaltenen Punkten gewinnst du in nur 3 Runden!</div>
+                    </div>
+                </div>
+
+                <!-- Schild -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#128737;</span>
+                        <span class="rules-section-title">Schild</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Jede Seite hat <strong>3 Schilde</strong> pro Partie. Ein aktivierter Schild erzeugt eine große Halbkugel, die Projektile ablenkt.
+                        <br><br>
+                        <strong>Schrumpfen:</strong> Der Schild wird nach jeder eigenen Runde um 10% kleiner und verschwindet nach 8 Runden automatisch. Setze ihn ein, während er am größten ist!
+                        <br><br>
+                        <strong>Kosten:</strong> 2 AP &#8212; du kannst in diesem Zug dann nicht mehr feuern.
+                        <div class="rules-tip">Ein Schild schützt alle eigenen Panzer innerhalb seines Radius. Gruppiere deine Truppen um einen geschirmten Panzer für maximale Wirkung.</div>
+                    </div>
+                </div>
+
+                <!-- Gelände & Umgebung -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#127748;</span>
+                        <span class="rules-section-title">Gelände &amp; Umgebung</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Die Karte ist mit <strong>Bäumen</strong> und <strong>Bunkern</strong> bevölkert &#8212; beide können als Deckung genutzt werden und blockieren Treffer. Explosionen können Bäume fällen und Bunker zerstören.
+                        <br><br>
+                        <strong>Wasser</strong> am Kartenrand ist nicht befahrbar. <strong>Steile Hänge</strong> verlangsamen Panzer deutlich. Höhenunterschiede beeinflussen die Flugbahn &#8212; ein tiefer stehender Feind ist leichter zu treffen.
+                        <br><br>
+                        <strong>Nebel des Krieges:</strong> Du siehst nur deinen aktiven Panzer im HUD. Feindpanzer haben keine Gesundheitsanzeige, solange es nicht dein Zug ist.
+                        <div class="rules-tip">Nutze den höheren Neigungswinkel (70&#8211;85&#176;) um über Hügel und Bunker hinwegzuschießen. Flache Schussbahnen sind schiller, aber riskanter.</div>
+                    </div>
+                </div>
+
+                <!-- KI-Schwierigkeitsgrade -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#129504;</span>
+                        <span class="rules-section-title">KI-Schwierigkeitsgrade</span>
+                    </div>
+                    <div class="rules-section-body">
+                        <table class="rules-table">
+                            <tr><th>Schwierigkeit</th><th>Sichtweite</th><th>Zielgenauigkeit</th><th>Verhalten</th></tr>
+                            <tr><td><span class="rules-tag rules-tag-blue">LEICHT</span></td><td>Klein</td><td>Stark zufällig</td><td>Patrouilliert, zielt ungenau</td></tr>
+                            <tr><td><span class="rules-tag rules-tag-gold">MITTEL</span></td><td>Mittel</td><td>Moderat</td><td>Navigiert aktiv zu Zielen</td></tr>
+                            <tr><td><span class="rules-tag rules-tag-red">SCHWER</span></td><td>Groß</td><td>Sehr präzise</td><td>Setzt Schilde ein, sucht optimalen Schuss</td></tr>
+                        </table>
+                        <div class="rules-tip">Gegen die Schwer-KI lohnt es sich, Rauchgranaten zu nutzen &#8212; sie kann keine Ziele außerhalb ihrer Sichtweite angreifen.</div>
+                    </div>
+                </div>
+
+                <!-- Siegbedingungen & Statistiken -->
+                <div class="rules-section">
+                    <div class="rules-section-head">
+                        <span class="rules-icon">&#128200;</span>
+                        <span class="rules-section-title">Siegbedingungen &amp; Statistiken</span>
+                    </div>
+                    <div class="rules-section-body">
+                        Nach dem Sieg erscheint ein detaillierter <strong>Kampfbericht</strong> mit: Abgefeuerte Schüsse, Treffer, Trefferquote (%), Gesamtschaden, zerstörte Panzer und gehaltene CP-Runden.
+                        <br><br>
+                        Das Team mit dem höchsten Gesamtschaden erhält den <span class="hl-gold">MVP-Titel</span>. Nach dem Bericht kannst du sofort eine neue Partie starten.
+                        <br><br>
+                        <strong>Siegen durch:</strong>
+                        <br>&#9670; Alle feindlichen Panzer vernichten
+                        <br>&#9670; Als Erster 8 Kontrollpunkt-Punkte erreichen
+                    </div>
+                </div>
+
+            </div><!-- end rules-body -->
+        </div><!-- end rules-panel -->
+    </div><!-- end rules-modal -->
+
+    <!-- Aktionspunkte Anzeige -->
+    <div id="ap-display">
+        <span class="ap-label">AP</span>
+        <div class="ap-pip" id="ap-1"></div>
+        <div class="ap-pip" id="ap-2"></div>
+        <div class="ap-pip" id="ap-3"></div>
+        <span class="ap-label" id="ap-hint">BEWEGEN+FEUERN</span>
+    </div>
+
+    <!-- Kontrollpunkte Score -->
+    <div id="cp-score">
+        <div class="cp-score-item"><span class="cp-flag">&#128309;</span><span style="color:var(--p1-color)" id="cp-p1-pts">0</span></div>
+        <span style="color:rgba(255,255,255,0.2); font-size:10px;">&#9670;</span>
+        <div class="cp-score-item"><span style="color:#aaa;font-size:9px;letter-spacing:2px;">KONTROLLPUNKTE</span></div>
+        <span style="color:rgba(255,255,255,0.2); font-size:10px;">&#9670;</span>
+        <div class="cp-score-item"><span style="color:var(--p2-color)" id="cp-p2-pts">0</span><span class="cp-flag">&#128308;</span></div>
+    </div>
+
+    <!-- Kontrollpunkt Status (rechts) -->
+    <div id="cp-status"></div>
+
+    <!-- Statistik Screen -->
+    <div id="stats-screen">
+        <div class="stats-panel">
+            <div class="stats-title" id="stats-winner-title">SIEG</div>
+            <div class="stats-subtitle">// Kampfbericht</div>
+            <div class="stats-mvp" id="stats-mvp"></div>
+            <div class="stats-grid" id="stats-grid"></div>
+            <button class="stats-btn" onclick="location.reload()">&#9654; Neue Partie</button>
+        </div>
+    </div>
+
+    <!-- Munitionsauswahl -->
+    <div id="ammo-selector"></div>
+
+    <div id="hud">
+        <div class="top-bar">
+            <div class="team-info p1 glass-panel">
+                <div class="team-name">Blue Squadron</div>
+                <div class="tank-icons" id="p1-tanks"></div>
+            </div>
+            <div class="team-info p2 glass-panel">
+                <div class="team-name">Red Vanguard</div>
+                <div class="tank-icons" id="p2-tanks"></div>
+            </div>
+        </div>
+        <div id="fx-layer"></div>
+        <div id="msg-center"></div>
+
+        <div id="dashboard" class="glass-panel">
+            <div id="select-overlay">
+                <button class="btn-cycle" id="btn-prev">◀ [A]</button>
+                <button class="btn-confirm" id="btn-confirm">ZIEL BESTÄTIGEN [ENTER]</button>
+                <button class="btn-cycle" id="btn-next">[D] ▶</button>
+            </div>
+            <div class="control-grid">
+                <div class="movement-wrapper">
+                    <div class="fuel-container">
+                        <span class="fuel-label">ENG</span>
+                        <div class="fuel-bar"><div id="fuel-fill"></div></div>
+                    </div>
+                    <div class="d-pad">
+                        <div class="btn-move" id="m-up">▲</div>
+                        <div class="btn-move" id="m-left">◀</div>
+                        <div class="d-pad-center">WASD</div>
+                        <div class="btn-move" id="m-right">▶</div>
+                        <div class="btn-move" id="m-down">▼</div>
+                    </div>
+                </div>
+                <div class="sliders-wrapper">
+                    <div class="slider-box">
+                        <div class="slider-header"><span>TURM <span class="key-hint">[Maus X]</span></span> <span class="slider-val" id="v-rot">0°</span></div>
+                        <input type="range" id="i-rot" min="-180" max="180" value="0">
+                    </div>
+                    <div class="slider-box">
+                        <div class="slider-header"><span>NEIGUNG <span class="key-hint">[Maus Y]</span></span> <span class="slider-val" id="v-ang">45°</span></div>
+                        <input type="range" id="i-ang" min="0" max="85" value="45">
+                    </div>
+                    <div class="slider-box">
+                        <div class="slider-header"><span>KRAFT <span class="key-hint">[Scroll]</span></span> <span class="slider-val" id="v-pow">60%</span></div>
+                        <input type="range" id="i-pow" min="10" max="150" value="60">
+                    </div>
+                </div>
+                <div class="action-container">
+                    <button id="shield-btn" class="action-btn">SCHILD<br><span style="font-size:9px;opacity:0.7;">[3]</span></button>
+                    <button id="fire-btn" class="action-btn">FEUER<br><span style="font-size:9px;opacity:0.7;">[ENTER]</span></button>
+                </div>
+            </div>
+        </div>
+    <div id="scene-label">GOLDEN HOUR</div>
+    <!-- Missile Flight View -->
+    <div id="missile-view">
+        <canvas id="missile-canvas"></canvas>
+        <div id="missile-view-label">⬡ MISSILE CAM</div>
+        <div id="missile-view-reticle"></div>
+    </div>
+    <div id="tac-feed"></div>
+    <div id="fog-indicator" style="position:fixed;top:12px;left:50%;transform:translateX(-50%);
+        background:rgba(0,0,0,0.5);color:#88aacc;font-family:'Courier New',monospace;
+        font-size:11px;padding:3px 10px;border-radius:3px;pointer-events:none;z-index:50;
+        display:none;">🌫️ NEBEL DES KRIEGES</div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/globals.js"></script>
+<script src="js/constants.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/tacfeed.js"></script>
+<script src="js/lighting.js"></script>
+<script src="js/camera.js"></script>
+<script src="js/weather.js"></script>
+<script src="js/world.js"></script>
+<script src="js/fx.js"></script>
+<script src="js/tank.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
